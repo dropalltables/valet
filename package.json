@@ -1,0 +1,34 @@
+{
+  "name": "valet",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "sandbox/supervisor"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:web": "npm run dev -w @valet/web",
+    "dev:core": "npm run dev -w @valet/core",
+    "up": "docker compose --profile sandbox build && docker compose up -d --build",
+    "down": "docker compose down",
+    "logs": "docker compose logs -f"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "node-pty": true,
+    "@tailwindcss/oxide": true,
+    "sharp": true,
+    "unrs-resolver": true
+  }
+}

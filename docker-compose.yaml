@@ -1,0 +1,95 @@
+# Valet: self-hosted cloud coding agents. One compose file is the whole install.
+#
+# Services
+#   db       Postgres 17
+#   core     API, orchestrator, and event log. Creates one sandbox container per
+#            thread through the Docker socket, so it needs /var/run/docker.sock.
+#   web      Next.js UI. Proxies /api to core; publishes the only host port.
+#   sandbox  Build-only (profile `sandbox`): the image every thread runs in.
+#            `docker compose --profile sandbox build` produces valet-sandbox:latest.
+#
+# The Docker socket grants core root-equivalent access to this host. That is the
+# price of creating and stopping containers on demand; do not expose core itself.
+
+name: valet
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      POSTGRES_USER: valet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: valet
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U valet -d valet"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks: [valet]
+
+  core:
+    build:
+      context: .
+      dockerfile: apps/core/Dockerfile
+    image: valet-core:latest
+    restart: unless-stopped
+    stop_grace_period: 15s
+    environment:
+      DATABASE_URL: postgres://valet:${POSTGRES_PASSWORD}@db:5432/valet
+      VALET_SECRET_KEY: ${VALET_SECRET_KEY:?set VALET_SECRET_KEY in .env (32 random bytes, base64)}
+      VALET_PASSWORD: ${VALET_PASSWORD:-}
+      VALET_BASE_URL: ${VALET_BASE_URL:-http://localhost:3000}
+      VALET_SANDBOX_IMAGE: ${VALET_SANDBOX_IMAGE:-valet-sandbox:latest}
+      VALET_DOCKER_NETWORK: valet_valet
+      VALET_REPOS_VOLUME: valet_repos
+      VALET_IDLE_PAUSE_MINUTES: ${VALET_IDLE_PAUSE_MINUTES:-10}
+      VALET_SANDBOX_MEMORY: ${VALET_SANDBOX_MEMORY:-4g}
+      VALET_SANDBOX_CPUS: ${VALET_SANDBOX_CPUS:-2}
+      VALET_MAX_RUNNING_SANDBOXES: ${VALET_MAX_RUNNING_SANDBOXES:-8}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - repos:/valet/repos
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [valet]
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: valet-web:latest
+    restart: unless-stopped
+    stop_grace_period: 10s
+    environment:
+      VALET_CORE_URL: http://core:8080
+      VALET_SECRET_KEY: ${VALET_SECRET_KEY}
+      VALET_PASSWORD: ${VALET_PASSWORD:-}
+    ports:
+      - "${VALET_BIND:-127.0.0.1}:${VALET_PORT:-3000}:3000"
+    depends_on:
+      core:
+        condition: service_started
+    networks: [valet]
+
+  # Build-only. Never started by `docker compose up`.
+  sandbox:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    image: ${VALET_SANDBOX_IMAGE:-valet-sandbox:latest}
+    profiles: [sandbox]
+    command: ["true"]
+
+networks:
+  valet:
+    driver: bridge
+
+volumes:
+  db-data:
+  # Bare git repositories for blank projects; mounted into core and every sandbox.
+  repos:
