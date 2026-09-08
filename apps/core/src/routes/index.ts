@@ -4,6 +4,7 @@ import { z } from 'zod'
 import {
   AGENT_LABELS,
   DEFAULT_MODEL,
+  USAGE_RANGES,
   createServiceRequestSchema,
   serviceNameSchema,
   type AgentInfo,
@@ -18,6 +19,7 @@ import {
   type SendMessageResponse,
   type ServicesResponse,
   type ThreadsResponse,
+  type UsageResponse,
 } from '@valet/shared'
 import type { Auth } from '../auth.js'
 import type { CredentialStore } from '../credentials/store.js'
@@ -35,6 +37,7 @@ import type { ProjectService } from '../projects/service.js'
 import type { SettingsService } from '../settings.js'
 import { updateSettingsSchema } from '../settings.js'
 import type { ThreadService } from '../threads/service.js'
+import type { UsageService } from '../usage/service.js'
 import { jsonBody, queryParams } from './validate.js'
 
 const log = logger('http')
@@ -52,6 +55,7 @@ export type AppDeps = {
   projects: ProjectService
   threads: ThreadService
   portals: PortalGateway
+  usage: UsageService
 }
 
 const imageSchema = z.object({ mediaType: z.string(), dataUrl: z.string() })
@@ -398,6 +402,13 @@ export function createApp(deps: AppDeps): Hono {
         ...(body.draft !== undefined ? { draft: body.draft } : {}),
       }),
     )
+  })
+
+  // ---- usage ------------------------------------------------------------------------------
+
+  app.get('/api/usage', queryParams(z.object({ range: z.enum(USAGE_RANGES).default('7d') })), async (c) => {
+    const body: UsageResponse = await deps.usage.summary(c.req.valid('query').range)
+    return c.json(body)
   })
 
   return app

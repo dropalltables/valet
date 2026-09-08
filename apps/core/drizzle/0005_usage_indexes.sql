@@ -1,0 +1,2 @@
+CREATE INDEX "thread_events_turn_end_idx" ON "thread_events" USING btree ("created_at") WHERE "thread_events"."type" = 'turn.end';--> statement-breakpoint
+CREATE INDEX "thread_events_usage_idx" ON "thread_events" USING btree ("id" DESC NULLS LAST) WHERE "thread_events"."type" = 'usage';

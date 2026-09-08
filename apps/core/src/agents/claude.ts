@@ -314,7 +314,7 @@ export class ClaudeAdapter implements Adapter {
           if (!w || typeof w.utilization !== 'number') continue
           limits.push({
             window: name,
-            utilization: w.utilization,
+            utilization: Math.min(1, Math.max(0, w.utilization)),
             resetsAt: typeof w.resetsAt === 'number' ? new Date(w.resetsAt * 1000).toISOString() : null,
           })
         }

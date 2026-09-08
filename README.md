@@ -70,6 +70,9 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
 - **Transcript.** Core normalizes Claude Code's `stream-json` and Codex's app-server
   protocol into one event log stored in Postgres and streamed to the browser over
   WebSocket, so reloading or reconnecting never loses output.
+- **Usage.** Cost, tokens, and turns rolled up by project and by agent and model over
+  7 days, 30 days, or all time, with each agent's last reported rate-limit windows.
+  Codex reports no cost, so its rows show tokens and turns only.
 - **Permissions.** By default the container is the sandbox and the agent runs
   without prompts. Threads can be created in *ask* mode, where tool use outside
   file edits pauses for approval in the transcript.

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
 import type { AgentKind, DiffStats, ModelOption, ModelsSource, PermissionPolicy, ProjectSource, PullRequestState, Service, Settings, ThreadStatus } from '@valet/shared'
 
@@ -82,7 +83,13 @@ export const threadEvents = pgTable(
     payload: jsonb('payload').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('thread_events_thread_seq_idx').on(t.threadId, t.seq)],
+  (t) => [
+    uniqueIndex('thread_events_thread_seq_idx').on(t.threadId, t.seq),
+    // Usage rollups scan one event type over a date range; rate limits read the
+    // newest `usage` event. Both are partial so they stay small next to the log.
+    index('thread_events_turn_end_idx').on(t.createdAt).where(sql`${t.type} = 'turn.end'`),
+    index('thread_events_usage_idx').on(t.id.desc()).where(sql`${t.type} = 'usage'`),
+  ],
 )
 
 export const credentials = pgTable('credentials', {

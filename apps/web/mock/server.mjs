@@ -495,6 +495,7 @@ async function startThread(row, prompt) {
     appendEvent(id, { type: 'tool.start', turnId, itemId: 'c', name: 'edit', vendorName: 'Edit', input: { file_path: 'apps/core/src/threads.ts', old_string: 'a', new_string: 'b' }, title: 'Edited apps/core/src/threads.ts', parentItemId: null }, { silent: true })
     appendEvent(id, { type: 'tool.output', turnId, itemId: 'c', output: 'ok', isError: false, exitCode: null, fileChanges: [{ path: 'apps/core/src/threads.ts', kind: 'update', diff: EDIT_DIFF }] }, { silent: true })
     appendEvent(id, { type: 'text.end', turnId, itemId: 'x', text: 'Fixed the comparison and added a regression test.' }, { silent: true })
+    appendEvent(id, { type: 'usage', turnId, usage: { inputTokens: 30500, outputTokens: 1800, costUsd: 0.42 }, rateLimits: [{ window: 'five_hour', utilization: 0.31, resetsAt: new Date(Date.now() + 3_600_000).toISOString() }, { window: 'seven_day', utilization: 0.62, resetsAt: new Date(Date.now() + 3 * 86_400_000).toISOString() }] }, { silent: true })
     appendEvent(id, { type: 'turn.end', turnId, status: 'completed', error: null, usage: { inputTokens: 30500, outputTokens: 1800, costUsd: 0.42 }, at: ago(40) }, { silent: true })
     appendEvent(id, { type: 'status', status: 'idle', detail: null, at: ago(40) }, { silent: true })
     t1.status = 'idle'
@@ -505,7 +506,14 @@ async function startThread(row, prompt) {
   addThread(thread({ id: 't-running', projectId: 'p-docs', title: 'Migrate docs build to Astro 6', branch: 'valet/astro-6-migration-1b2c', baseBranch: 'develop', agent: 'codex', model: 'gpt-6-astra', status: 'running', lastActivityAt: ago(1), createdAt: ago(20) }))
   threads.get('t-running').diffStats = { files: 12, additions: 318, deletions: 240 }
   addThread(thread({ id: 't-waiting', title: 'Add rate limit headers to the API', branch: 'valet/rate-limit-headers-9d1e', permissions: 'ask', status: 'waiting', lastActivityAt: ago(3), createdAt: ago(30), pr: { url: 'https://github.com/acme/valet/pull/412', number: 412, state: 'open' } }))
-  addThread(thread({ id: 't-paused', title: 'Write release notes for 0.4', branch: 'valet/release-notes-0-4-77aa', status: 'paused', containerId: null, lastActivityAt: ago(60 * 3), createdAt: ago(60 * 5), costUsd: 1.13 }))
+  addThread(
+    thread({ id: 't-paused', title: 'Write release notes for 0.4', branch: 'valet/release-notes-0-4-77aa', status: 'paused', containerId: null, lastActivityAt: ago(60 * 3), createdAt: ago(60 * 5), costUsd: 1.13 }),
+    [
+      { type: 'turn.start', turnId: 'turn-paused', prompt: { text: 'Write release notes for 0.4 from the merged PRs.', images: [] }, mode: 'queue', at: ago(60 * 5) },
+      { type: 'text.end', turnId: 'turn-paused', itemId: 'x', text: 'Drafted release notes covering 14 merged pull requests.' },
+      { type: 'turn.end', turnId: 'turn-paused', status: 'completed', error: null, usage: { inputTokens: 82400, outputTokens: 5400, costUsd: 1.13 }, at: ago(60 * 3) },
+    ],
+  )
   threads.get('t-paused').diffStats = { files: 1, additions: 88, deletions: 0 }
   addThread(
     thread({ id: 't-error', projectId: 'p-scratch', title: 'Bootstrap a CLI in Go', branch: 'valet/bootstrap-cli-go-4e4e', status: 'error', error: 'Setup script exited with code 1', containerId: null, lastActivityAt: ago(60 * 26), createdAt: ago(60 * 27) }),
@@ -518,7 +526,15 @@ async function startThread(row, prompt) {
       { type: 'status', status: 'error', detail: 'Setup script exited with code 1', at: ago(60 * 26) },
     ],
   )
-  addThread(thread({ id: 't-archived', title: 'Remove the legacy runner', branch: 'valet/remove-legacy-runner-c0de', status: 'archived', containerId: null, archivedAt: ago(60 * 24 * 4), lastActivityAt: ago(60 * 24 * 4), createdAt: ago(60 * 24 * 6), pr: { url: 'https://github.com/acme/valet/pull/398', number: 398, state: 'merged' }, costUsd: 3.9 }))
+  addThread(
+    thread({ id: 't-archived', projectId: 'p-scratch', model: 'sonnet', title: 'Remove the legacy runner', branch: 'valet/remove-legacy-runner-c0de', status: 'archived', containerId: null, archivedAt: ago(60 * 24 * 4), lastActivityAt: ago(60 * 24 * 4), createdAt: ago(60 * 24 * 6), pr: { url: 'https://github.com/acme/valet/pull/398', number: 398, state: 'merged' }, costUsd: 4.21 }),
+    [
+      { type: 'turn.start', turnId: 'turn-archived', prompt: { text: 'Remove the legacy runner and its tests.', images: [] }, mode: 'queue', at: ago(60 * 24 * 6) },
+      { type: 'text.end', turnId: 'turn-archived', itemId: 'x', text: 'Removed the legacy runner, its config and its tests.' },
+      { type: 'turn.end', turnId: 'turn-archived', status: 'completed', error: null, usage: { inputTokens: 210300, outputTokens: 14800, costUsd: 3.9 }, at: ago(60 * 24 * 5) },
+      { type: 'turn.end', turnId: 'turn-archived', status: 'completed', error: null, usage: { inputTokens: 12400, outputTokens: 900, costUsd: 0.31 }, at: ago(60 * 24 * 4) },
+    ],
+  )
 
   // The running seed keeps producing output so the sidebar shows live activity.
   // It is a real current turn: steer attaches to it and interrupt ends it.
@@ -662,6 +678,75 @@ export async function pauseIdle(db: Db, minutes: number, stop: (t: Thread) => Pr
 
 const LIVE = new Set(['running', 'waiting', 'idle'])
 
+const DAY_MS = 86_400_000
+const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10)
+
+/** The `turn.end` rollup core computes in SQL, over the events this mock holds in memory. */
+function usageResponse(range) {
+  const today = Date.parse(`${utcDay(Date.now())}T00:00:00Z`)
+  const since = range === 'all' ? null : today - ((range === '30d' ? 30 : 7) - 1) * DAY_MS
+  const group = (map, key, fields) => {
+    let g = map.get(key)
+    if (!g) map.set(key, (g = { ...fields, costUsd: null, inputTokens: 0, outputTokens: 0, turns: 0, ids: new Set() }))
+    return g
+  }
+  const totals = ({ ids, ...g }) => ({ ...g, threads: ids.size })
+  const byProject = new Map()
+  const byModel = new Map()
+  const byDay = new Map()
+  const limits = new Map()
+
+  for (const t of threads.values()) {
+    const { id, projectId, agent, model } = t.row
+    for (const { event } of t.events) {
+      if (event.type === 'usage' && event.rateLimits) limits.set(agent, { rateLimits: event.rateLimits, observedAt: now() })
+      if (event.type !== 'turn.end' || !event.usage) continue
+      const at = Date.parse(event.at)
+      if (since !== null && at < since) continue
+      for (const g of [
+        group(byProject, projectId, { projectId, projectName: projects.get(projectId)?.name ?? projectId }),
+        group(byModel, `${agent}/${model}`, { agent, model }),
+        group(byDay, utcDay(at), { day: utcDay(at) }),
+      ]) {
+        if (event.usage.costUsd != null) g.costUsd = (g.costUsd ?? 0) + event.usage.costUsd
+        g.inputTokens += event.usage.inputTokens ?? 0
+        g.outputTokens += event.usage.outputTokens ?? 0
+        g.turns += 1
+        g.ids.add(id)
+      }
+    }
+  }
+
+  const days = [...byDay.values()].map(totals).sort((a, b) => a.day.localeCompare(b.day))
+  const from = since ?? (days[0] ? Date.parse(`${days[0].day}T00:00:00Z`) : today)
+  const daily = []
+  for (let d = from; d <= today; d += DAY_MS) {
+    daily.push(days.find((x) => x.day === utcDay(d)) ?? { day: utcDay(d), costUsd: null, inputTokens: 0, outputTokens: 0, turns: 0, threads: 0 })
+  }
+  const projectTotals = [...byProject.values()].map(totals)
+  return {
+    range,
+    since: since === null ? null : new Date(since).toISOString(),
+    totals: projectTotals.reduce(
+      (a, r) => ({
+        costUsd: r.costUsd === null ? a.costUsd : (a.costUsd ?? 0) + r.costUsd,
+        inputTokens: a.inputTokens + r.inputTokens,
+        outputTokens: a.outputTokens + r.outputTokens,
+        turns: a.turns + r.turns,
+        threads: a.threads + r.threads,
+      }),
+      { costUsd: null, inputTokens: 0, outputTokens: 0, turns: 0, threads: 0 },
+    ),
+    byProject: projectTotals,
+    byModel: [...byModel.values()].map(totals),
+    bucket: 'day',
+    daily,
+    rateLimits: [...limits].flatMap(([agent, { rateLimits, observedAt }]) =>
+      rateLimits.filter((l) => l.resetsAt === null || Date.parse(l.resetsAt) > Date.now()).map((l) => ({ ...l, agent, observedAt })),
+    ),
+  }
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, 'http://localhost')
   const path = url.pathname
@@ -799,6 +884,12 @@ async function handle(req, res) {
       return send(res, 204)
     }
     return send(res, 200, project)
+  }
+
+  if (path === '/api/usage') {
+    const range = url.searchParams.get('range') ?? '7d'
+    if (!['7d', '30d', 'all'].includes(range)) return fail(res, 400, 'Invalid range')
+    return send(res, 200, usageResponse(range))
   }
 
   if (path === '/api/threads') {
