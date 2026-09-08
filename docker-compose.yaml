@@ -8,6 +8,13 @@
 #            publishes the only host port.
 #   sandbox  Build-only (profile `sandbox`): the image every thread runs in.
 #            `docker compose --profile sandbox build` produces valet-sandbox:latest.
+#            Core also pulls this image itself when it is missing.
+#
+# Images are built here by default. Set VALET_IMAGE_PREFIX (e.g. ghcr.io/your-org/) to
+# name published images instead, and add -f docker-compose.prebuilt.yaml to skip building.
+#
+# Core discovers the Docker network and the repos volume by inspecting its own container,
+# because the compose project name (and so their prefix) belongs to whoever deploys this.
 #
 # The Docker socket grants core root-equivalent access to this host. That is the
 # price of creating and stopping containers on demand; do not expose core itself.
@@ -36,7 +43,7 @@ services:
     build:
       context: .
       dockerfile: apps/core/Dockerfile
-    image: valet-core:latest
+    image: ${VALET_IMAGE_PREFIX:-}valet-core:latest
     restart: unless-stopped
     stop_grace_period: 15s
     environment:
@@ -45,9 +52,9 @@ services:
       VALET_PASSWORD: ${VALET_PASSWORD:-}
       VALET_BASE_URL: ${VALET_BASE_URL:-http://localhost:3000}
       VALET_PORTAL_DOMAIN: ${VALET_PORTAL_DOMAIN:-}
-      VALET_SANDBOX_IMAGE: ${VALET_SANDBOX_IMAGE:-valet-sandbox:latest}
-      VALET_DOCKER_NETWORK: valet_valet
-      VALET_REPOS_VOLUME: valet_repos
+      VALET_SANDBOX_IMAGE: ${VALET_SANDBOX_IMAGE:-${VALET_IMAGE_PREFIX:-}valet-sandbox:latest}
+      VALET_DOCKER_NETWORK: ${VALET_DOCKER_NETWORK:-}
+      VALET_REPOS_VOLUME: ${VALET_REPOS_VOLUME:-}
       VALET_IDLE_PAUSE_MINUTES: ${VALET_IDLE_PAUSE_MINUTES:-10}
       VALET_SANDBOX_MEMORY: ${VALET_SANDBOX_MEMORY:-4g}
       VALET_SANDBOX_CPUS: ${VALET_SANDBOX_CPUS:-2}
@@ -64,7 +71,7 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-    image: valet-web:latest
+    image: ${VALET_IMAGE_PREFIX:-}valet-web:latest
     restart: unless-stopped
     stop_grace_period: 10s
     environment:
@@ -85,7 +92,7 @@ services:
     build:
       context: .
       dockerfile: sandbox/Dockerfile
-    image: ${VALET_SANDBOX_IMAGE:-valet-sandbox:latest}
+    image: ${VALET_SANDBOX_IMAGE:-${VALET_IMAGE_PREFIX:-}valet-sandbox:latest}
     profiles: [sandbox]
     command: ["true"]
 

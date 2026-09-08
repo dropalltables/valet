@@ -37,9 +37,10 @@ const schema = z.object({
   /** Portal hosts are `t-<thread>-p<port>.<this>`; defaults to the host[:port] of VALET_BASE_URL. */
   VALET_PORTAL_DOMAIN: z.preprocess(emptyToUndefined, z.string().optional()),
   VALET_SANDBOX_IMAGE: z.preprocess(emptyToUndefined, z.string().default('valet-sandbox:latest')),
-  VALET_DOCKER_NETWORK: z.preprocess(emptyToUndefined, z.string().default('valet_valet')),
-  /** Named volume, or an absolute host path to bind-mount instead (development). */
-  VALET_REPOS_VOLUME: z.preprocess(emptyToUndefined, z.string().default('valet_repos')),
+  /** Discovered from core's own container when unset (the compose project name is not knowable here). */
+  VALET_DOCKER_NETWORK: z.preprocess(emptyToUndefined, z.string().optional()),
+  /** Named volume, or an absolute host path to bind-mount instead (development). Discovered when unset. */
+  VALET_REPOS_VOLUME: z.preprocess(emptyToUndefined, z.string().optional()),
   /** Where core itself sees the repos volume. */
   VALET_REPOS_DIR: z.preprocess(emptyToUndefined, z.string().default('/valet/repos')),
   VALET_IDLE_PAUSE_MINUTES: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).default(10)),

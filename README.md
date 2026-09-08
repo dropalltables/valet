@@ -7,7 +7,8 @@ sandbox, and opening pull requests.
 
 ## Requirements
 
-- A Linux server (or a Mac for local use) with Docker Engine 24+ and Docker Compose v2.
+- A Linux server (or a Mac for local use) with Docker Engine 24+ and Docker Compose v2
+  (v2.24+ for `docker-compose.prebuilt.yaml`, which uses the `!reset` tag).
 - A Claude subscription (Pro, Max, Team, or Enterprise) or an Anthropic API key, for Claude Code.
 - A ChatGPT subscription or an OpenAI API key, for Codex.
 - A GitHub personal access token, for private repositories and pull requests.
@@ -50,6 +51,49 @@ valet.example.com, *.valet.example.com {
 
 Traefik: route `HostRegexp(...)` matching `valet.example.com` and `t-*.valet.example.com`
 to the web service, and list `*.valet.example.com` under the certificate resolver's `domains`.
+
+## Deploy on Coolify
+
+Coolify names the compose project after the resource UUID, so the network and volumes are
+`<uuid>_valet`, `<uuid>_repos`, `<uuid>_db-data`. Core reads its own container to find them,
+so leave `VALET_DOCKER_NETWORK` and `VALET_REPOS_VOLUME` unset.
+
+1. New resource, Docker Compose, this repository, compose file `docker-compose.yaml`.
+   To deploy published images instead of building on the server, use the compose files
+   `docker-compose.yaml,docker-compose.prebuilt.yaml` and set `VALET_IMAGE_PREFIX` to
+   `ghcr.io/<owner>/`, leaving `VALET_SANDBOX_IMAGE` empty (a value there overrides
+   the prefix).
+2. Environment variables: `POSTGRES_PASSWORD`, `VALET_SECRET_KEY`, `VALET_PASSWORD`,
+   `VALET_BASE_URL` (`https://valet.example.com`), `VALET_PORTAL_DOMAIN`
+   (`valet.example.com`), and `VALET_IMAGE_PREFIX` when deploying published images.
+3. Set the domain on the `web` service, port 3000. Coolify's Traefik joins the stack's
+   network by itself.
+4. Portals need a wildcard host, which the domain field cannot express, so add the labels
+   to `web` yourself:
+
+   ```yaml
+   labels:
+     - traefik.enable=true
+     - traefik.http.routers.valet.rule=Host(`valet.example.com`) || HostRegexp(`^t-.+\.valet\.example\.com$`)
+     - traefik.http.routers.valet.entrypoints=https
+     - traefik.http.routers.valet.tls=true
+     - traefik.http.routers.valet.tls.certresolver=letsencrypt
+     - traefik.http.services.valet.loadbalancer.server.port=3000
+   ```
+
+   The wildcard certificate is a one-time setting on Coolify's own proxy (Server, Proxy,
+   Dynamic Configuration): a DNS challenge for `*.valet.example.com`, since HTTP challenges
+   cannot issue wildcards. Point `valet.example.com` and `*.valet.example.com` at the server.
+5. Core mounts `/var/run/docker.sock`, which Coolify allows as it stands.
+6. Core pulls the sandbox image when it is missing, on startup and every ten minutes, with
+   progress in the log and under Settings. An image name without a registry host (the default
+   `valet-sandbox:latest`) is built on the host instead, with
+   `docker compose --profile sandbox build`.
+
+The `images` workflow publishes `valet-core`, `valet-web` and `valet-sandbox` on every push to
+`main`. From a fork, make the three packages public after its first run (Packages, Package
+settings, Change visibility): neither compose nor core sends registry credentials. Its
+`linux/arm64` jobs run on `ubuntu-24.04-arm`, which GitHub provides to public repositories only.
 
 ## How it works
 
@@ -156,7 +200,10 @@ valet portal 8000            # the portal URL for any port
 | `VALET_PORTAL_DOMAIN` | host of `VALET_BASE_URL` | Portals are served at `t-<thread>-p<port>.<domain>`; needs a wildcard DNS record on a server |
 | `VALET_BIND` | `127.0.0.1` | Host interface for the UI port |
 | `VALET_PORT` | `3000` | Host port for the UI |
-| `VALET_SANDBOX_IMAGE` | `valet-sandbox:latest` | Image threads run in |
+| `VALET_IMAGE_PREFIX` | empty | Registry prefix for the `valet-*` images, e.g. `ghcr.io/your-org/` |
+| `VALET_SANDBOX_IMAGE` | `${VALET_IMAGE_PREFIX}valet-sandbox:latest` | Image threads run in; core pulls it when it is missing and its name has a registry host |
+| `VALET_DOCKER_NETWORK` | discovered | Network sandboxes join; read from core's own container |
+| `VALET_REPOS_VOLUME` | discovered | Volume (or host path) holding bare repositories |
 | `VALET_IDLE_PAUSE_MINUTES` | `10` | Idle time before a container is stopped |
 | `VALET_SANDBOX_MEMORY` | `4g` | Memory limit per sandbox |
 | `VALET_SANDBOX_CPUS` | `2` | CPU limit per sandbox |
@@ -172,6 +219,8 @@ bun run dev:web    # http://localhost:3000
 ```
 
 Core needs the Docker socket and the sandbox image (`docker compose --profile sandbox build`).
+Running outside a container, it cannot discover its own network and volume, so set
+`VALET_DOCKER_NETWORK=valet_valet` and `VALET_REPOS_VOLUME=valet_repos`.
 
 ## Security notes
 

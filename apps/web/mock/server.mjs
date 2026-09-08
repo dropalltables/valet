@@ -678,7 +678,7 @@ async function handle(req, res) {
       docker: process.env.MOCK_DOCKER_DOWN
         ? { ok: false, error: 'connect ENOENT /var/run/docker.sock' }
         : { ok: true, error: null },
-      sandboxImage: { image: 'valet-sandbox:latest', present: true, imageId: 'sha256:9f2a7c1d3e4b5a6f7081920a1b2c3d4e5f60718293a4b5c6d7e8f9', createdAt: ago(60 * 24) },
+      sandboxImage: { image: 'valet-sandbox:latest', present: true, imageId: 'sha256:9f2a7c1d3e4b5a6f7081920a1b2c3d4e5f60718293a4b5c6d7e8f9', createdAt: ago(60 * 24), pulling: null, pullError: null },
       authEnabled: PASSWORD !== '',
     })
   }
