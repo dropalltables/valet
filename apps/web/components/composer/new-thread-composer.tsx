@@ -125,37 +125,51 @@ function Composer() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
+      {/* Where the thread runs: its own row above the box, like Codex and Claude. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <ProjectPicker
+          projects={projects}
+          value={projectId}
+          onChange={setProjectId}
+          creating={creatingProject}
+          onCreatingChange={setCreatingProject}
+          size="sm"
+        />
+        <PromptInputSelect value={effectiveBranch ?? ''} onValueChange={setBaseBranch} disabled={!project}>
+          <PromptInputSelectTrigger size="sm" aria-label="Base branch" className="font-mono text-xs">
+            <PromptInputSelectValue placeholder="Branch" />
+          </PromptInputSelectTrigger>
+          <PromptInputSelectContent>
+            {branches.map((b) => (
+              <PromptInputSelectItem key={b} value={b} className="font-mono text-xs">
+                {b}
+              </PromptInputSelectItem>
+            ))}
+          </PromptInputSelectContent>
+        </PromptInputSelect>
+      </div>
       <PromptInput onSubmit={submit} accept="image/*" multiple globalDrop className="flex flex-col">
         <DropOverlay />
         <AttachmentStrip />
         <ComposerTextarea disabled={busy} canSubmit={canSubmit} />
         <PromptInputFooter className="flex-nowrap items-center gap-2">
-          <PromptInputTools className="min-w-0 flex-1 flex-nowrap gap-2 overflow-x-auto">
-            <ProjectPicker
-              projects={projects}
-              value={projectId}
-              onChange={setProjectId}
-              creating={creatingProject}
-              onCreatingChange={setCreatingProject}
-              size="sm"
-            />
+          <PromptInputTools className="min-w-0 flex-nowrap gap-1">
+            <AttachButton />
             <PromptInputSelect
-              value={effectiveBranch ?? ''}
-              onValueChange={setBaseBranch}
-              disabled={!project}
+              value={permissions ?? 'auto'}
+              onValueChange={(v) => setPermissions(v as PermissionPolicy)}
             >
-              <PromptInputSelectTrigger size="sm" aria-label="Base branch" className="font-mono text-xs">
-                <PromptInputSelectValue placeholder="Branch" />
+              <PromptInputSelectTrigger size="sm" aria-label="Permissions">
+                <PromptInputSelectValue />
               </PromptInputSelectTrigger>
               <PromptInputSelectContent>
-                {branches.map((b) => (
-                  <PromptInputSelectItem key={b} value={b} className="font-mono text-xs">
-                    {b}
-                  </PromptInputSelectItem>
-                ))}
+                <PromptInputSelectItem value="auto">Auto</PromptInputSelectItem>
+                <PromptInputSelectItem value="ask">Ask</PromptInputSelectItem>
               </PromptInputSelectContent>
             </PromptInputSelect>
+          </PromptInputTools>
+          <div className="flex min-w-0 items-center gap-2">
             <PromptInputSelect
               value={agent ?? ''}
               onValueChange={(v) => {
@@ -208,24 +222,11 @@ function Composer() {
                 ))}
               </PromptInputSelectContent>
             </PromptInputSelect>
-            <PromptInputSelect
-              value={permissions ?? 'auto'}
-              onValueChange={(v) => setPermissions(v as PermissionPolicy)}
-            >
-              <PromptInputSelectTrigger size="sm" aria-label="Permissions">
-                <PromptInputSelectValue />
-              </PromptInputSelectTrigger>
-              <PromptInputSelectContent>
-                <PromptInputSelectItem value="auto">Auto</PromptInputSelectItem>
-                <PromptInputSelectItem value="ask">Ask</PromptInputSelectItem>
-              </PromptInputSelectContent>
-            </PromptInputSelect>
-            <AttachButton />
-          </PromptInputTools>
-          <Button type="submit" size="sm" className="shrink-0" disabled={!canSubmit}>
-            Start
-            <kbd className="ml-1 font-sans text-xs text-primary-foreground/70">{modKey}+Enter</kbd>
-          </Button>
+            <Button type="submit" size="sm" className="shrink-0" disabled={!canSubmit}>
+              Start
+              <kbd className="ml-1 font-sans text-xs text-primary-foreground/70">{modKey}+Enter</kbd>
+            </Button>
+          </div>
         </PromptInputFooter>
       </PromptInput>
       {/* Outside the PromptInput: forms cannot nest. */}
