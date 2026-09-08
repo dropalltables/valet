@@ -6,7 +6,12 @@
  *
  * All request/response bodies are JSON. Errors are `{ error: string }` with a 4xx/5xx
  * status. Authentication: when `VALET_PASSWORD` is set, every route except
- * `/api/health` and `/api/auth/*` requires the `valet_session` cookie.
+ * `/api/health`, `/api/auth/*`, and `/api/portal-auth` requires the `valet_session` cookie.
+ *
+ * Portals (see the Portals section below) are the exception to "everything under
+ * `/api`": requests whose Host is `t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>` are
+ * rewritten by the web app to core's `/portal/<thread>/<port><path>` and proxied
+ * into the sandbox.
  */
 
 import type {
@@ -19,6 +24,7 @@ import type {
   FileEntry,
   Health,
   PermissionPolicy,
+  Portal,
   Project,
   ProjectEnvVar,
   Settings,
@@ -207,6 +213,56 @@ export type PushResponse = { branch: string; pushed: true }
 export type CreatePrRequest = { title?: string; body?: string; draft?: boolean }
 
 // ---------------------------------------------------------------------------
+// Portals
+// ---------------------------------------------------------------------------
+
+/**
+ * Every TCP port listening inside a running sandbox (except the supervisor and
+ * VNC ports) is a portal at `${scheme}://t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`.
+ * Core polls the supervisor's `/ports` while the container runs and pushes changes
+ * as `{ t: 'portals' }` stream frames.
+ *
+ * GET /api/threads/:id/portals -> { portals } (the last known list while paused)
+ */
+export type PortalsResponse = { portals: Portal[] }
+
+/**
+ * POST /api/threads/:id/portals/:port/share { hours } -> { url, expiresAt }
+ * `url` is `<portal origin>/__valet/auth?token=...`; opening it grants access to
+ * that one portal for `hours` without a Valet login.
+ * DELETE /api/threads/:id/portals/:port/share -> 204; every link issued so far for
+ * the port stops working.
+ */
+/**
+ * GET /api/threads/:id/portals/:port/auth?path=/some/path -> { url }
+ * A portal URL that signs the browser in on that host and lands on `path`
+ * (`<portal origin>/__valet/auth?token=...`, valid for 60 s). The Portals tab loads
+ * its iframe from this, because inside a cross-site frame the session cookie never
+ * reaches `/api/portal-auth`. Without `VALET_PASSWORD` it is the plain portal URL.
+ */
+export type PortalAuthUrlResponse = { url: string }
+
+export const SHARE_HOURS = [1, 3, 24, 168] as const
+export type ShareHours = (typeof SHARE_HOURS)[number]
+export type SharePortalRequest = { hours: ShareHours }
+export type SharePortalResponse = { url: string; expiresAt: string }
+
+/**
+ * Portal-host routes, served by core through the web app's Host rewrite:
+ *
+ *   ANY  <portal>/*                  proxied to the app inside the sandbox
+ *   GET  <portal>/__valet/auth?token= sets the `valet_portal` cookie for this host, then redirects
+ *   POST <portal>/__valet/wake       wakes a paused sandbox (owner only), then redirects to /
+ *   GET  /api/portal-auth?return=<portal URL>  (main host) turns a valid `valet_session`
+ *        into a short-lived token and redirects to `<portal>/__valet/auth`
+ *
+ * With `VALET_PASSWORD` set, a portal request without a valid `valet_portal` cookie
+ * is redirected to `/api/portal-auth`. Without it, portals are open like the UI.
+ */
+export const PORTAL_AUTH_PATH = '/__valet/auth'
+export const PORTAL_WAKE_PATH = '/__valet/wake'
+
+// ---------------------------------------------------------------------------
 // WebSockets
 // ---------------------------------------------------------------------------
 
@@ -222,6 +278,8 @@ export type StreamFrame =
   | { t: 'live' }
   /** Thread row changed (status, pr, title, container). */
   | { t: 'thread'; thread: Thread }
+  /** Full current list, sent once after replay and again whenever it changes. */
+  | { t: 'portals'; portals: Portal[] }
   | { t: 'error'; message: string }
 
 /**

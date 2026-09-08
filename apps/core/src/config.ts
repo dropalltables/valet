@@ -34,6 +34,8 @@ const schema = z.object({
     }),
   VALET_PASSWORD: z.preprocess(emptyToUndefined, z.string().optional()),
   VALET_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().default('http://localhost:3000')),
+  /** Portal hosts are `t-<thread>-p<port>.<this>`; defaults to the host[:port] of VALET_BASE_URL. */
+  VALET_PORTAL_DOMAIN: z.preprocess(emptyToUndefined, z.string().optional()),
   VALET_SANDBOX_IMAGE: z.preprocess(emptyToUndefined, z.string().default('valet-sandbox:latest')),
   VALET_DOCKER_NETWORK: z.preprocess(emptyToUndefined, z.string().default('valet_valet')),
   /** Named volume, or an absolute host path to bind-mount instead (development). */

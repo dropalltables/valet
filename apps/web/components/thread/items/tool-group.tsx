@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type { FileChange, ToolItem } from '@valet/shared'
 import { ChevronRightIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -184,7 +184,28 @@ function ToolOutputView({ tool }: { tool: ToolItem }) {
   )
 }
 
+const URL_RE = /https?:\/\/[^\s<>"'`)\]]+/g
+
+/** Plain text with URLs (portal links a command printed) turned into links that open in a new tab. */
+function linkify(text: string): ReactNode[] {
+  const out: ReactNode[] = []
+  let last = 0
+  for (const m of text.matchAll(URL_RE)) {
+    const start = m.index
+    if (start > last) out.push(text.slice(last, start))
+    out.push(
+      <a key={start} href={m[0]} target="_blank" rel="noreferrer" className="underline">
+        {m[0]}
+      </a>,
+    )
+    last = start + m[0].length
+  }
+  if (last < text.length) out.push(text.slice(last))
+  return out
+}
+
 function Mono({ text, error = false }: { text: string; error?: boolean }) {
+  const content = useMemo(() => linkify(text), [text])
   return (
     <pre
       className={cn(
@@ -192,7 +213,7 @@ function Mono({ text, error = false }: { text: string; error?: boolean }) {
         error && 'text-destructive',
       )}
     >
-      {text}
+      {content}
     </pre>
   )
 }

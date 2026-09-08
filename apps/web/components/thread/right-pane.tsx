@@ -2,35 +2,42 @@
 
 import dynamic from 'next/dynamic'
 import { useState } from 'react'
-import { LIVE_STATUSES, type Project, type ThreadListItem } from '@valet/shared'
+import { LIVE_STATUSES, type Portal, type Project, type ThreadListItem } from '@valet/shared'
+import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ChangesPanel } from '@/components/panels/changes-panel'
 import { FilesPanel } from '@/components/panels/files-panel'
 import { PaneState } from '@/components/panels/pane-state'
+import { PortalsPanel } from '@/components/panels/portals-panel'
 import type { ThreadActions } from '@/components/thread/thread-actions'
 
 const TerminalPanel = dynamic(() => import('@/components/panels/terminal-panel'), { ssr: false })
 const DesktopPanel = dynamic(() => import('@/components/panels/desktop-panel'), { ssr: false })
 
-type Tab = 'changes' | 'files' | 'terminal' | 'desktop'
+export type RightPaneTab = 'changes' | 'portals' | 'files' | 'terminal' | 'desktop'
 
 export function RightPane({
   thread,
   actions,
+  portals,
+  tab,
+  onTabChange,
 }: {
   thread: ThreadListItem
   project: Project | undefined
   actions: ThreadActions
+  portals: Portal[]
+  tab: RightPaneTab
+  onTabChange: (tab: RightPaneTab) => void
 }) {
-  const [tab, setTab] = useState<Tab>('changes')
   // Terminal and desktop open a socket when mounted, so they mount on first
   // visit and then stay mounted (hidden) to keep their sessions across switches.
-  const [visited, setVisited] = useState<ReadonlySet<Tab>>(() => new Set(['changes']))
+  const [visited, setVisited] = useState<ReadonlySet<RightPaneTab>>(() => new Set([tab]))
   const live = LIVE_STATUSES.includes(thread.status)
 
   function select(next: string): void {
-    const t = next as Tab
-    setTab(t)
+    const t = next as RightPaneTab
+    onTabChange(t)
     if (!visited.has(t)) setVisited(new Set([...visited, t]))
   }
 
@@ -39,6 +46,14 @@ export function RightPane({
       <TabsList variant="line" className="w-full justify-start rounded-none border-b px-2">
         <TabsTrigger value="changes" className="flex-none px-2">
           Changes
+        </TabsTrigger>
+        <TabsTrigger value="portals" className="flex-none px-2">
+          Portals
+          {portals.length > 0 && (
+            <Badge variant="secondary" className="h-4 px-1.5 text-[10px] tabular-nums">
+              {portals.length}
+            </Badge>
+          )}
         </TabsTrigger>
         <TabsTrigger value="files" className="flex-none px-2">
           Files
@@ -52,6 +67,9 @@ export function RightPane({
       </TabsList>
       <TabsContent value="changes" className="min-h-0 flex-1">
         <ChangesPanel thread={thread} actions={actions} />
+      </TabsContent>
+      <TabsContent value="portals" className="min-h-0 flex-1">
+        <PortalsPanel thread={thread} portals={portals} actions={actions} />
       </TabsContent>
       <TabsContent value="files" className="min-h-0 flex-1">
         <FilesPanel thread={thread} actions={actions} />

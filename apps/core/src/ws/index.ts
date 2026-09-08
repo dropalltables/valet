@@ -7,6 +7,7 @@ import { holdBrowserFrames, relay } from '../docker/supervisor-client.js'
 import { HttpError } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { errorMessage, logger } from '../logger.js'
+import type { PortalGateway } from '../portals/gateway.js'
 import type { ThreadService } from '../threads/service.js'
 
 const log = logger('ws')
@@ -17,12 +18,18 @@ const CLOSE_NOT_FOUND = 4404
 const CLOSE_PAUSED = 4409
 const CLOSE_ERROR = 4500
 
-export type WsDeps = { auth: Auth; events: EventLog; threads: ThreadService }
+export type WsDeps = { auth: Auth; events: EventLog; threads: ThreadService; portals: PortalGateway }
 
-type Route = { kind: 'global' } | { kind: 'stream'; id: string; since: number } | { kind: 'relay'; id: string; target: 'pty' | 'vnc' }
+type Route =
+  | { kind: 'global' }
+  | { kind: 'stream'; id: string; since: number }
+  | { kind: 'relay'; id: string; target: 'pty' | 'vnc' }
+  | { kind: 'portal'; threadId: string; port: string }
 
 function route(url: URL): Route | null {
   if (url.pathname === '/api/stream') return { kind: 'global' }
+  const portal = /^\/portal\/([^/]+)\/([^/]+)(?:\/|$)/.exec(url.pathname)
+  if (portal && portal[1] && portal[2]) return { kind: 'portal', threadId: portal[1], port: portal[2] }
   const m = /^\/api\/threads\/([^/]+)\/(stream|pty|vnc)$/.exec(url.pathname)
   if (!m || !m[1]) return null
   if (m[2] === 'stream') {
@@ -48,6 +55,14 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
       const target = route(url)
       if (!target) {
         reject(socket, '404 Not Found')
+        return
+      }
+      if (target.kind === 'portal') {
+        // Portal cookies, not the session cookie, authorize this one.
+        void deps.portals.upgrade(req, socket, head, target.threadId, target.port).catch((err: unknown) => {
+          log.warn('portal upgrade failed', { url: req.url, message: errorMessage(err) })
+          if (!socket.destroyed) reject(socket, '502 Bad Gateway')
+        })
         return
       }
       if (!deps.auth.authorizedUpgrade(req)) {
@@ -142,6 +157,8 @@ async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: numbe
   held.length = 0
   const { projectName: _p, diffStats: _d, ...row } = thread
   sendJson(ws, { t: 'thread', thread: row } satisfies StreamFrame)
+  const portals = await deps.threads.portals(id).catch(() => [])
+  sendJson(ws, { t: 'portals', portals } satisfies StreamFrame)
   sendJson(ws, { t: 'live' } satisfies StreamFrame)
 }
 

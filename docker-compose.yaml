@@ -4,7 +4,8 @@
 #   db       Postgres 17
 #   core     API, orchestrator, and event log. Creates one sandbox container per
 #            thread through the Docker socket, so it needs /var/run/docker.sock.
-#   web      Next.js UI. Proxies /api to core; publishes the only host port.
+#   web      Next.js UI. Proxies /api and portal hosts (t-<thread>-p<port>.*) to core;
+#            publishes the only host port.
 #   sandbox  Build-only (profile `sandbox`): the image every thread runs in.
 #            `docker compose --profile sandbox build` produces valet-sandbox:latest.
 #
@@ -43,6 +44,7 @@ services:
       VALET_SECRET_KEY: ${VALET_SECRET_KEY:?set VALET_SECRET_KEY in .env (32 random bytes, base64)}
       VALET_PASSWORD: ${VALET_PASSWORD:-}
       VALET_BASE_URL: ${VALET_BASE_URL:-http://localhost:3000}
+      VALET_PORTAL_DOMAIN: ${VALET_PORTAL_DOMAIN:-}
       VALET_SANDBOX_IMAGE: ${VALET_SANDBOX_IMAGE:-valet-sandbox:latest}
       VALET_DOCKER_NETWORK: valet_valet
       VALET_REPOS_VOLUME: valet_repos
@@ -69,6 +71,8 @@ services:
       VALET_CORE_URL: http://core:8080
       VALET_SECRET_KEY: ${VALET_SECRET_KEY}
       VALET_PASSWORD: ${VALET_PASSWORD:-}
+      VALET_BASE_URL: ${VALET_BASE_URL:-http://localhost:3000}
+      VALET_PORTAL_DOMAIN: ${VALET_PORTAL_DOMAIN:-}
     ports:
       - "${VALET_BIND:-127.0.0.1}:${VALET_PORT:-3000}:3000"
     depends_on:

@@ -30,11 +30,13 @@ type Props = {
   project: Project | undefined
   costUsd: number | null
   actions: ThreadActions
+  portalCount: number
+  onOpenPortals: () => void
 }
 
 const PR_STATE: Record<'open' | 'merged' | 'closed', string> = { open: 'Open', merged: 'Merged', closed: 'Closed' }
 
-export function ThreadHeader({ thread, project, costUsd, actions }: Props) {
+export function ThreadHeader({ thread, project, costUsd, actions, portalCount, onOpenPortals }: Props) {
   const router = useRouter()
   const { upsertThread, removeThread } = useAppData()
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -123,6 +125,11 @@ export function ThreadHeader({ thread, project, costUsd, actions }: Props) {
         </span>
         <span>{thread.permissions === 'ask' ? 'Ask' : 'Auto'}</span>
         {cost && <span className="tabular-nums">{cost}</span>}
+        {portalCount > 0 && (
+          <button type="button" onClick={onOpenPortals} className="tabular-nums hover:text-foreground">
+            {portalCount} {portalCount === 1 ? 'portal' : 'portals'}
+          </button>
+        )}
       </div>
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>

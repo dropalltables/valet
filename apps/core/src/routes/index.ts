@@ -11,6 +11,7 @@ import {
   type CredentialKind,
   type EventsResponse,
   type Health,
+  type PortalsResponse,
   type ProjectsResponse,
   type PushResponse,
   type SendMessageResponse,
@@ -26,6 +27,7 @@ import { HttpError, badRequest, notFound, statusOf } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { GitHub } from '../git/github.js'
 import { errorMessage, logger } from '../logger.js'
+import type { PortalGateway } from '../portals/gateway.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SettingsService } from '../settings.js'
 import { updateSettingsSchema } from '../settings.js'
@@ -45,6 +47,7 @@ export type AppDeps = {
   settings: SettingsService
   projects: ProjectService
   threads: ThreadService
+  portals: PortalGateway
 }
 
 const imageSchema = z.object({ mediaType: z.string(), dataUrl: z.string() })
@@ -83,6 +86,13 @@ const permissionSchema = z.object({ decision: z.enum(['allow', 'deny']) })
 const answersSchema = z.object({ answers: z.record(z.string(), z.array(z.string())) })
 const prSchema = z.object({ title: z.string().optional(), body: z.string().optional(), draft: z.boolean().optional() })
 const putCredentialSchema = z.object({ token: z.string().optional(), apiKey: z.string().optional() })
+const shareSchema = z.object({ hours: z.union([z.literal(1), z.literal(3), z.literal(24), z.literal(168)]) })
+
+function parsePort(raw: string): number {
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw badRequest('invalid port')
+  return port
+}
 
 function parseKind(raw: string): CredentialKind {
   const parsed = credentialKind.safeParse(raw)
@@ -101,6 +111,8 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ error: errorMessage(err) }, 500)
   })
   app.notFound((c) => c.json({ error: 'not found' }, 404))
+  // Portal traffic authenticates with its own cookie, so it is mounted ahead of the session check.
+  app.route('/', deps.portals.routes())
   app.use('/api/*', deps.auth.middleware())
   app.route('/', deps.auth.routes())
 
@@ -308,6 +320,21 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/threads/:id/changes', async (c) => c.json(await deps.threads.changes(c.req.param('id'))))
   app.get('/api/threads/:id/files', async (c) => c.json(await deps.threads.files(c.req.param('id'), c.req.query('path') ?? '')))
   app.get('/api/threads/:id/file', async (c) => c.json(await deps.threads.file(c.req.param('id'), c.req.query('path') ?? '')))
+
+  app.get('/api/threads/:id/portals', async (c) => {
+    const body: PortalsResponse = { portals: await deps.threads.portals(c.req.param('id')) }
+    return c.json(body)
+  })
+  app.get('/api/threads/:id/portals/:port/auth', async (c) =>
+    c.json(await deps.portals.authUrl(c.req.param('id'), parsePort(c.req.param('port')), c.req.query('path') ?? '/')),
+  )
+  app.post('/api/threads/:id/portals/:port/share', jsonBody(shareSchema), async (c) =>
+    c.json(await deps.portals.share(c.req.param('id'), parsePort(c.req.param('port')), c.req.valid('json').hours)),
+  )
+  app.delete('/api/threads/:id/portals/:port/share', async (c) => {
+    await deps.portals.revoke(c.req.param('id'), parsePort(c.req.param('port')))
+    return c.body(null, 204)
+  })
 
   app.post('/api/threads/:id/push', async (c) => {
     const { branch } = await deps.threads.push(c.req.param('id'))

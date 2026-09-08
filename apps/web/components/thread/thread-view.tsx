@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useAppData } from '@/components/app/data-provider'
 import { CreatePrDialog } from '@/components/thread/create-pr-dialog'
-import { RightPane } from '@/components/thread/right-pane'
+import { RightPane, type RightPaneTab } from '@/components/thread/right-pane'
 import { useThreadActions } from '@/components/thread/thread-actions'
 import { ThreadComposer } from '@/components/thread/thread-composer'
 import { ThreadHeader } from '@/components/thread/thread-header'
@@ -63,6 +63,7 @@ function ThreadBody({
 }) {
   const { patchThread } = useAppData()
   const actions = useThreadActions(thread, project)
+  const [tab, setTab] = useState<RightPaneTab>('changes')
 
   return (
     <div className="flex h-full flex-col">
@@ -71,6 +72,8 @@ function ThreadBody({
         project={project}
         costUsd={stream.transcript.totalCostUsd || thread.costUsd}
         actions={actions}
+        portalCount={stream.portals.length}
+        onOpenPortals={() => setTab('portals')}
       />
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize="55" minSize="30" className="flex min-w-0 flex-col">
@@ -85,7 +88,7 @@ function ThreadBody({
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize="45" minSize="20" className="min-w-0">
-          <RightPane thread={thread} project={project} actions={actions} />
+          <RightPane thread={thread} project={project} actions={actions} portals={stream.portals} tab={tab} onTabChange={setTab} />
         </ResizablePanel>
       </ResizablePanelGroup>
       <CreatePrDialog thread={thread} open={actions.prOpen} onOpenChange={actions.setPrOpen} onCreated={patchThread} />

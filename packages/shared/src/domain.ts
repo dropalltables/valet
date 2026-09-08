@@ -136,6 +136,53 @@ export type Thread = {
   archivedAt: string | null
 }
 
+/**
+ * A TCP port listening inside the sandbox, reachable from the browser at `url`
+ * through the portal proxy (`t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`).
+ */
+export type Portal = {
+  port: number
+  /** From the repo's `.valet/ports.json` (`{ "3000": "web" }`) when present. */
+  name: string | null
+  /** Listening process (argv[0] basename), when readable. */
+  process: string | null
+  /** Browser-facing origin, e.g. `http://t-<thread>-p3000.localhost:3000`. */
+  url: string
+  /** Expiry of the active share link for this port, or null when none is active. */
+  shareExpiresAt: string | null
+}
+
+/** Portal hostnames: `t-<threadId>-p<port>.<domain>`. Thread ids are lowercase alphanumerics (see core `ids.ts`). */
+export const PORTAL_HOST_RE = /^t-([a-z0-9]+)-p(\d+)\./
+
+/**
+ * Domain portal hosts live under: `VALET_PORTAL_DOMAIN`, or the host[:port] of
+ * `VALET_BASE_URL`. Core and the web app must agree, so both derive it from here.
+ */
+export function portalDomain(env: { VALET_PORTAL_DOMAIN?: string | undefined; VALET_BASE_URL?: string | undefined }): string {
+  const explicit = env.VALET_PORTAL_DOMAIN?.trim().toLowerCase()
+  if (explicit) return explicit
+  return new URL(env.VALET_BASE_URL?.trim() || 'http://localhost:3000').host.toLowerCase()
+}
+
+export function portalHost(threadId: string, port: number, domain: string): string {
+  return `t-${threadId}-p${port}.${domain}`
+}
+
+/**
+ * Thread and port of a browser-facing host under `domain`, or null for any other
+ * host. `host` may carry a port (`t-abc-p3000.localhost:3000`).
+ */
+export function parsePortalHost(host: string, domain: string): { threadId: string; port: number } | null {
+  const lower = host.toLowerCase()
+  const m = PORTAL_HOST_RE.exec(lower)
+  if (!m || !m[1] || !m[2]) return null
+  const port = Number(m[2])
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null
+  if (lower !== portalHost(m[1], port, domain)) return null
+  return { threadId: m[1], port }
+}
+
 /** Summary counts shown next to a thread: `+12 -3` across 4 files. */
 export type DiffStats = {
   files: number
@@ -246,5 +293,7 @@ export const SANDBOX = {
   supervisorPort: 9500,
   /** VNC server port (localhost only) the supervisor relays to `/vnc`. */
   vncPort: 5901,
+  /** Optional port names for portals, committed to the repo: `{ "3000": "web", "8000": "api" }`. */
+  portsFile: '/home/valet/workspace/repo/.valet/ports.json',
   display: ':1',
 } as const

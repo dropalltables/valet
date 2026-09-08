@@ -12,6 +12,9 @@ import { DockerClient } from './docker/client.js'
 import { EventLog } from './events/log.js'
 import { GitHub, parseGitHubUrl } from './git/github.js'
 import { errorMessage, logger } from './logger.js'
+import { PortalAuth } from './portals/auth.js'
+import { PortalGateway } from './portals/gateway.js'
+import { PortalUrls } from './portals/urls.js'
 import { ProjectService } from './projects/service.js'
 import { createApp } from './routes/index.js'
 import { SettingsService } from './settings.js'
@@ -42,15 +45,20 @@ async function main(): Promise<void> {
     if (!token || !ref) return null
     return new GitHub(token).defaultBranch(ref).catch(() => null)
   })
-  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings })
+  const portalUrls = new PortalUrls(cfg)
+  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings, portalUrls })
   const deviceLogins = new DeviceLoginManager(db, docker, credentials)
   const auth = new Auth(cfg, cipher)
+  const portalAuth = new PortalAuth(cipher, auth.enabled, db)
+  await portalAuth.load()
+  auth.onLogout(() => portalAuth.revokeOwners())
+  const portals = new PortalGateway({ cfg, urls: portalUrls, portalAuth, auth, threads })
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, settings, projects, threads })
+  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, settings, projects, threads, portals })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
-    log.info('listening', { port: info.port, auth: auth.enabled })
+    log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server
-  attachWebSockets(server, { auth, events, threads })
+  attachWebSockets(server, { auth, events, threads, portals })
 
   await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))

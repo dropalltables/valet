@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, max, sql } from 'drizzle-orm'
-import type { GlobalFrame, Project, StoredEvent, StreamFrame, Thread, ThreadEvent, ThreadListItem } from '@valet/shared'
+import type { GlobalFrame, Portal, Project, StoredEvent, StreamFrame, Thread, ThreadEvent, ThreadListItem } from '@valet/shared'
 import type { Db } from '../db/index.js'
 import { threadEvents } from '../db/schema.js'
 import { logger } from '../logger.js'
@@ -201,6 +201,10 @@ export class EventLog {
     delete (row as Partial<ThreadListItem>).diffStats
     this.fanout(thread.id, { t: 'thread', thread: row })
     this.fanoutGlobal({ t: 'thread', thread })
+  }
+
+  publishPortals(threadId: string, portals: Portal[]): void {
+    this.fanout(threadId, { t: 'portals', portals })
   }
 
   publishThreadDeleted(id: string): void {

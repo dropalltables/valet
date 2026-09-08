@@ -1,6 +1,6 @@
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
-import { SUPERVISOR_TOKEN_ENV } from '@valet/shared'
+import { PORTAL_ENV, SUPERVISOR_TOKEN_ENV } from '@valet/shared'
 
 /**
  * Container env that spawned processes inherit. Everything else the supervisor
@@ -17,6 +17,8 @@ const BASE_ENV_KEYS = [
   'CODEX_HOME',
   'DISABLE_AUTOUPDATER',
   'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
+  PORTAL_ENV.threadId,
+  PORTAL_ENV.urlTemplate,
 ] as const
 
 export function childEnv(overrides: Record<string, string> = {}): Record<string, string> {

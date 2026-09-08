@@ -19,6 +19,12 @@ function safeNext(raw: string | null): string {
   return raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/'
 }
 
+/** `/api/*` targets (portal sign-in) are answered by core with redirects, so they need a full navigation. */
+function go(router: ReturnType<typeof useRouter>, next: string): void {
+  if (next.startsWith('/api/')) window.location.assign(next)
+  else router.replace(next)
+}
+
 function LoginForm() {
   const router = useRouter()
   const params = useSearchParams()
@@ -31,7 +37,7 @@ function LoginForm() {
     api.auth
       .session()
       .then((s) => {
-        if (!s.required || s.authenticated) router.replace(next)
+        if (!s.required || s.authenticated) go(router, next)
       })
       .catch(() => undefined)
   }, [router, next])
@@ -42,7 +48,7 @@ function LoginForm() {
     setError(null)
     try {
       await api.auth.login({ password })
-      router.replace(next)
+      go(router, next)
     } catch (err) {
       setError(err instanceof ApiError && err.status === 401 ? 'Wrong password' : errorMessage(err))
       setBusy(false)

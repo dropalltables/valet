@@ -1,4 +1,4 @@
-import { bigint, bigserial, boolean, doublePrecision, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
+import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
 import type { AgentKind, DiffStats, PermissionPolicy, ProjectSource, PullRequestState, Settings, ThreadStatus } from '@valet/shared'
 
 export const projects = pgTable('projects', {
@@ -26,6 +26,13 @@ export const projectEnvVars = pgTable(
 )
 
 export type PrRow = { url: string; number: number; state: PullRequestState }
+/** A listening port as last reported by the sandbox; the URL is derived at read time. */
+export type StoredPortal = { port: number; name: string | null; process: string | null }
+/**
+ * Share state per port (keyed by the port as a string). Tokens carry `generation`;
+ * revoking bumps it, which invalidates every link and cookie issued before.
+ */
+export type PortalShare = { generation: number; expiresAt: string | null }
 
 export const threads = pgTable(
   'threads',
@@ -49,6 +56,8 @@ export const threads = pgTable(
     pr: jsonb('pr').$type<PrRow>(),
     costUsd: doublePrecision('cost_usd'),
     diffStats: jsonb('diff_stats').$type<DiffStats>(),
+    portals: jsonb('portals').$type<StoredPortal[]>(),
+    portalShares: jsonb('portal_shares').$type<Record<string, PortalShare>>(),
     firstPrompt: text('first_prompt').notNull(),
     /** Set once the repo is cloned and the branch exists on the home volume. */
     repoReady: boolean('repo_ready').notNull().default(false),
@@ -86,6 +95,15 @@ export const settings = pgTable('settings', {
   id: text('id').primaryKey(),
   data: jsonb('data').$type<Partial<Settings>>().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * One row. Owner portal cookies embed `portal_owner_generation`; logging out bumps
+ * it, which is the only way to revoke cookies that live on the portal hosts.
+ */
+export const authState = pgTable('auth_state', {
+  id: text('id').primaryKey(),
+  portalOwnerGeneration: integer('portal_owner_generation').notNull().default(0),
 })
 
 export const deviceLogins = pgTable('device_logins', {

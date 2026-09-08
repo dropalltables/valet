@@ -3,12 +3,14 @@ import {
   execServerFrameSchema,
   fsListReplySchema,
   healthReplySchema,
+  portsReplySchema,
   runReplySchema,
   type AgentProcess,
   type ExecClientFrame,
   type ExecServerFrame,
   type FsListReply,
   type HealthReply,
+  type PortsReply,
   type ProcessRunner,
   type RunReply,
   type RunRequest,
@@ -113,6 +115,16 @@ export class SupervisorClient {
       }),
       'fs/mkdir',
     )
+  }
+
+  async ports(): Promise<PortsReply> {
+    const res = await this.expectOk(await this.request('/ports', { timeoutMs: 5_000 }), 'ports')
+    return portsReplySchema.parse(await res.json())
+  }
+
+  /** Where a portal request for `port` goes, with the bearer header the supervisor expects. */
+  portalTarget(port: number, pathAndQuery: string): { url: URL; headers: Record<string, string> } {
+    return { url: new URL(`/portal/${port}${pathAndQuery}`, this.baseUrl), headers: this.headers() }
   }
 
   openSocket(path: '/exec' | '/pty' | '/vnc'): WebSocket {

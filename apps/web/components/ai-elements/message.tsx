@@ -320,6 +320,18 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { code };
 
+// Links in a transcript (portal URLs, docs) must not navigate the thread away.
+const ExternalLink = ({
+  node: _node,
+  children,
+  ...props
+}: ComponentProps<"a"> & { node?: unknown }) => (
+  <a target="_blank" rel="noreferrer" {...props}>
+    {children}
+  </a>
+);
+const streamdownComponents = { a: ExternalLink };
+
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
@@ -328,6 +340,7 @@ export const MessageResponse = memo(
         className
       )}
       plugins={streamdownPlugins}
+      components={streamdownComponents}
       {...props}
     />
   ),

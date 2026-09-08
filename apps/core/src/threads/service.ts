@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, lt, ne, notInArray } from 'drizzle-orm'
 import {
   MESSAGEABLE_STATUSES,
+  PORTAL_ENV,
   SANDBOX,
   slugify,
   type ChangesResponse,
@@ -9,6 +10,7 @@ import {
   type FileEntry,
   type FileResponse,
   type FilesResponse,
+  type Portal,
   type SendMessageRequest,
   type Thread,
   type ThreadEvent,
@@ -24,7 +26,7 @@ import type { Config } from '../config.js'
 import type { CredentialStore } from '../credentials/store.js'
 import { randomHex, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
-import { projects, threads, type ThreadRow } from '../db/schema.js'
+import { projects, threads, type PortalShare, type StoredPortal, type ThreadRow } from '../db/schema.js'
 import { LABEL_THREAD, sandboxName, volumeName, type DockerClient } from '../docker/client.js'
 import { waitForSupervisor, type ExecSocket, type SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError, badRequest, conflict, notFound } from '../errors.js'
@@ -34,9 +36,11 @@ import { computeChanges, git } from '../git/changes.js'
 import { GitHub, cloneUrl, requireRepoRef } from '../git/github.js'
 import { newId, shortHex } from '../ids.js'
 import { errorMessage, logger } from '../logger.js'
+import { PortalPoller } from '../portals/poller.js'
+import type { PortalUrls } from '../portals/urls.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SettingsService } from '../settings.js'
-import { titleFromPrompt, toListItem, toThread } from './mapper.js'
+import { titleFromPrompt, toListItem, toPortals, toThread } from './mapper.js'
 import {
   cloneRepo,
   prepareBranch,
@@ -61,7 +65,13 @@ const FILE_CONTENT_LIMIT = 1024 * 1024
 
 type QueuedMessage = { turnId: string; text: string; images: PromptImage[] }
 
-type LiveSandbox = { containerId: string; supervisor: SupervisorClient; exec: ExecSocket | null }
+type LiveSandbox = { containerId: string; supervisor: SupervisorClient; exec: ExecSocket | null; portals: PortalPoller }
+
+/** Where a portal request for a thread should go. */
+export type PortalTarget =
+  | { kind: 'missing' }
+  | { kind: 'stopped'; row: ThreadRow }
+  | { kind: 'running'; row: ThreadRow; supervisor: SupervisorClient }
 
 type Live = {
   id: string
@@ -89,6 +99,7 @@ export type ThreadServiceDeps = {
   projects: ProjectService
   credentials: CredentialStore
   settings: SettingsService
+  portalUrls: PortalUrls
 }
 
 const now = (): string => new Date().toISOString()
@@ -108,6 +119,7 @@ export class ThreadService {
   private readonly projects: ProjectService
   private readonly credentials: CredentialStore
   private readonly settings: SettingsService
+  private readonly portalUrls: PortalUrls
 
   constructor(deps: ThreadServiceDeps) {
     this.db = deps.db
@@ -118,6 +130,7 @@ export class ThreadService {
     this.projects = deps.projects
     this.credentials = deps.credentials
     this.settings = deps.settings
+    this.portalUrls = deps.portalUrls
   }
 
   // ---- rows -----------------------------------------------------------------------
@@ -195,6 +208,11 @@ export class ThreadService {
 
   private sink(id: string): LogSink {
     return (level, message) => void this.events.append(id, { type: 'log', level, message, at: now() })
+  }
+
+  /** Project variables plus what scripts and the agent need to print portal URLs. */
+  private sandboxEnv(id: string, projectEnv: Record<string, string>): Record<string, string> {
+    return { ...projectEnv, [PORTAL_ENV.threadId]: id, [PORTAL_ENV.urlTemplate]: this.portalUrls.template(id) }
   }
 
   // ---- queries --------------------------------------------------------------------
@@ -305,7 +323,47 @@ export class ThreadService {
 
   private dropSandbox(live: Live): void {
     live.sandbox?.exec?.close()
+    live.sandbox?.portals.stop()
     live.sandbox = null
+  }
+
+  /** Records a reachable supervisor for the thread and starts watching its ports; a previous handle's poller stops first. */
+  private attachSandbox(live: Live, containerId: string, supervisor: SupervisorClient): LiveSandbox {
+    if (live.sandbox) this.dropSandbox(live)
+    const portals = new PortalPoller(live.id, supervisor, {
+      onChange: (list) => void this.setPortals(live.id, list),
+      onUnreachable: () => void this.checkSandbox(live.id).catch((err) => log.warn('sandbox check failed', { id: live.id, err })),
+    })
+    const sandbox: LiveSandbox = { containerId, supervisor, exec: null, portals }
+    live.sandbox = sandbox
+    portals.start()
+    return sandbox
+  }
+
+  /**
+   * Called when the live supervisor stopped answering (a portal request or the port
+   * poller failed to connect). A Docker round trip decides: a running container whose
+   * supervisor answers is a transient failure and keeps its handle; anything else
+   * loses the handle, and a container that stopped outside pause() (OOM kill, daemon
+   * restart, `docker stop`) leaves the thread paused, so Wake starts it again.
+   */
+  async checkSandbox(id: string): Promise<void> {
+    const live = this.live.get(id)
+    const stale = live?.sandbox
+    if (!live || !stale) return
+    const state = await this.docker.inspect(stale.containerId).catch(() => null)
+    const running = state?.running ?? false
+    if (running && (await stale.supervisor.health().then(() => true, () => false))) return
+    await this.withLock(id, async () => {
+      // Whatever held the lock may have re-resolved the sandbox already.
+      if (live.sandbox !== stale) return
+      log.warn('sandbox stopped answering', { id, running })
+      await this.stopAdapter(live)
+      this.dropSandbox(live)
+      if (running) return
+      const row = await this.row(id)
+      if (row.status === 'idle' || row.status === 'waiting' || row.status === 'running') await this.setStatus(id, 'paused')
+    })
   }
 
   /** Pauses the least recently active idle threads until one more sandbox may run. */
@@ -351,7 +409,13 @@ export class ThreadService {
       await this.ensureCapacity(row.id)
       await this.docker.ensureVolume(row.volumeName, { [LABEL_THREAD]: row.id })
       this.sink(row.id)('info', 'Creating sandbox')
-      containerId = await this.docker.createSandbox({ threadId: row.id, projectId: row.projectId, token, volume: row.volumeName })
+      containerId = await this.docker.createSandbox({
+        threadId: row.id,
+        projectId: row.projectId,
+        token,
+        volume: row.volumeName,
+        portalUrlTemplate: this.portalUrls.template(row.id),
+      })
       await this.patch(row.id, { containerId })
       state = await this.docker.inspect(containerId)
       if (!state) throw new Error('sandbox container disappeared after creation')
@@ -368,9 +432,7 @@ export class ThreadService {
       startedNow = true
     }
     const supervisor = await waitForSupervisor(this.docker.supervisorCandidates(sandboxName(row.id), state), token, SUPERVISOR_BOOT_MS, signal)
-    const sandbox: LiveSandbox = { containerId: state.id, supervisor, exec: null }
-    live.sandbox = sandbox
-    return { sandbox, startedNow }
+    return { sandbox: this.attachSandbox(live, state.id, supervisor), startedNow }
   }
 
   private async ensureExec(live: Live): Promise<ExecSocket> {
@@ -398,7 +460,7 @@ export class ThreadService {
       this.token(row),
       SUPERVISOR_REATTACH_MS,
     )
-    live.sandbox = { containerId: state.id, supervisor, exec: null }
+    this.attachSandbox(live, state.id, supervisor)
     return supervisor
   }
 
@@ -418,7 +480,7 @@ export class ThreadService {
       const project = await this.projects.getRow(row.projectId)
       const { sandbox } = await this.ensureSandbox(live, row, signal)
       const exec = await this.ensureExec(live)
-      const projectEnv = await this.projects.decryptedEnv(project.id)
+      const projectEnv = this.sandboxEnv(id, await this.projects.decryptedEnv(project.id))
       const sink = this.sink(id)
 
       if (!(await repoExists(sandbox.supervisor))) {
@@ -452,7 +514,7 @@ export class ThreadService {
     const { sandbox, startedNow } = await this.ensureSandbox(live, row)
     if (startedNow) {
       const exec = await this.ensureExec(live)
-      const projectEnv = await this.projects.decryptedEnv(row.projectId)
+      const projectEnv = this.sandboxEnv(id, await this.projects.decryptedEnv(row.projectId))
       await writeEnvFile(sandbox.supervisor, projectEnv)
       await runResume(sandbox.supervisor, exec, projectEnv, this.sink(id))
     }
@@ -527,7 +589,7 @@ export class ThreadService {
     const sandbox = live.sandbox
     if (!sandbox) throw new Error('sandbox is not running')
     const exec = await this.ensureExec(live)
-    const env: Record<string, string> = { ...(await this.projects.decryptedEnv(row.projectId)), HOME: SANDBOX.home }
+    const env: Record<string, string> = { ...this.sandboxEnv(row.id, await this.projects.decryptedEnv(row.projectId)), HOME: SANDBOX.home }
 
     let adapter: Adapter
     if (row.agent === 'claude') {
@@ -557,7 +619,11 @@ export class ThreadService {
       permissions: row.permissions,
       env,
       resumeSessionId: row.agentSessionId,
-      systemPromptSuffix: systemPromptSuffix({ branch: row.branch, baseBranch: row.baseBranch }),
+      systemPromptSuffix: systemPromptSuffix({
+        branch: row.branch,
+        baseBranch: row.baseBranch,
+        portalUrlTemplate: this.portalUrls.template(row.id),
+      }),
       onEvent: (event) => this.onAdapterEvent(live, event),
       onSessionId: (sessionId) => {
         if (sessionId === row.agentSessionId) return
@@ -865,6 +931,53 @@ export class ThreadService {
     return supervisor.openSocket(`/${kind}`)
   }
 
+  // ---- portals -----------------------------------------------------------------------------
+
+  private async setPortals(id: string, portals: StoredPortal[]): Promise<void> {
+    try {
+      const [row] = await this.db.update(threads).set({ portals }).where(eq(threads.id, id)).returning()
+      if (row) this.events.publishPortals(id, toPortals(row, this.portalUrls))
+    } catch (err) {
+      log.warn('failed to store portals', { id, err })
+    }
+  }
+
+  /** Last known listening ports, with URLs; the list persists while the container is paused. */
+  async portals(id: string): Promise<Portal[]> {
+    return toPortals(await this.row(id), this.portalUrls)
+  }
+
+  /**
+   * Resolves a portal request. The supervisor handle attached to the live thread is
+   * trusted without a Docker round trip: portal pages fetch dozens of assets, and a
+   * container that died since is reported by the proxy as unreachable anyway.
+   */
+  async portalTarget(id: string): Promise<PortalTarget> {
+    let row: ThreadRow
+    try {
+      row = await this.row(id)
+    } catch {
+      return { kind: 'missing' }
+    }
+    if (row.status === 'archived') return { kind: 'missing' }
+    const live = this.live.get(id)
+    if (live?.sandbox && live.sandbox.containerId === row.containerId) return { kind: 'running', row, supervisor: live.sandbox.supervisor }
+    const supervisor = await this.runningSupervisor(id).catch(() => null)
+    return supervisor ? { kind: 'running', row, supervisor } : { kind: 'stopped', row }
+  }
+
+  async portalShare(id: string, port: number): Promise<PortalShare> {
+    const row = await this.row(id)
+    return row.portalShares?.[String(port)] ?? { generation: 0, expiresAt: null }
+  }
+
+  async setPortalShare(id: string, port: number, share: PortalShare): Promise<void> {
+    const row = await this.row(id)
+    const portalShares = { ...(row.portalShares ?? {}), [String(port)]: share }
+    const [updated] = await this.db.update(threads).set({ portalShares }).where(eq(threads.id, id)).returning()
+    if (updated) this.events.publishPortals(id, toPortals(updated, this.portalUrls))
+  }
+
   // ---- git: push and pull requests ---------------------------------------------------------------
 
   async push(id: string): Promise<{ branch: string }> {
@@ -936,6 +1049,7 @@ export class ThreadService {
         log.info('reconciled thread', { id: row.id, from: row.status, to: status })
         await this.setStatus(row.id, status, detail ?? 'Recovered after restart')
       }
+      if (status === 'idle') await this.runningSupervisor(row.id).catch((err) => log.warn('reattach failed', { id: row.id, err }))
     }
     for (const c of byThread.values()) log.warn('managed container without a thread', { id: c.Id, names: c.Names })
   }

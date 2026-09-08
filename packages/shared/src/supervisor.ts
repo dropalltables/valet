@@ -18,6 +18,11 @@
  *   GET  /fs/read?path=         -> raw bytes (200) ; 404 ; 413 when > 5 MB
  *   PUT  /fs/write?path=&mode=  raw bytes -> 204 (creates parent dirs)
  *   POST /fs/mkdir { path }     -> 204
+ *   GET  /ports                 -> PortsReply (TCP ports in LISTEN state, minus 9500 and 5901)
+ *   ANY  /portal/:port/*        proxied to 127.0.0.1:<port> with Host `localhost:<port>`;
+ *                               WebSocket upgrades are tunnelled byte for byte. The
+ *                               supervisor's own failures carry `PORTAL_ERROR_HEADER`
+ *                               so core can tell them from the app's responses.
  */
 
 import { z } from 'zod'
@@ -121,3 +126,30 @@ export const fsListReplySchema = z.object({
 export type FsListReply = z.infer<typeof fsListReplySchema>
 
 export const fsMkdirRequestSchema = z.object({ path: z.string() })
+
+export const portsReplySchema = z.object({
+  ports: z.array(
+    z.object({
+      port: z.number(),
+      /** Null when no readable process owns the socket. */
+      pid: z.number().nullable(),
+      /** argv[0] basename, else comm. */
+      process: z.string().nullable(),
+    }),
+  ),
+})
+export type PortsReply = z.infer<typeof portsReplySchema>
+
+/** Set on 502s the supervisor generates itself (app not listening, connect timeout). */
+export const PORTAL_ERROR_HEADER = 'x-valet-portal-error'
+/**
+ * Core needs `Authorization` for the supervisor's bearer token, so the browser's own
+ * `Authorization` (if any) travels in this header and is restored before the app sees it.
+ */
+export const PORTAL_APP_AUTHORIZATION_HEADER = 'x-valet-app-authorization'
+/** Portal request env seen by processes in the sandbox. */
+export const PORTAL_ENV = {
+  threadId: 'VALET_THREAD_ID',
+  /** `http://t-<thread>-p{port}.localhost:3000`; replace `{port}`. */
+  urlTemplate: 'VALET_PORTAL_URL_TEMPLATE',
+} as const

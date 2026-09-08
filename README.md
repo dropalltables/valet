@@ -32,7 +32,21 @@ Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup unde
 3. **GitHub**: paste a personal access token with `repo` scope.
 
 To serve Valet on a domain, put a reverse proxy (Caddy, Traefik, nginx) in front of
-port 3000 and set `VALET_BASE_URL`. WebSockets must be proxied.
+port 3000 and set `VALET_BASE_URL`. WebSockets must be proxied. Portals (below) are
+subdomains, so also point a wildcard DNS record `*.valet.example.com` at the same box
+and issue a wildcard certificate. Caddy, with the DNS-challenge module for your provider:
+
+```
+valet.example.com, *.valet.example.com {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Traefik: route `HostRegexp(...)` matching `valet.example.com` and `t-*.valet.example.com`
+to the web service, and list `*.valet.example.com` under the certificate resolver's `domains`.
 
 ## How it works
 
@@ -60,6 +74,19 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   run through core with a short-lived credential helper.
 - **Desktop and terminal.** Every sandbox runs a VNC desktop (Xfce, Chromium) and a
   shared tmux session; both are relayed through core, so no extra ports are exposed.
+- **Portals.** Every TCP port listening inside a running sandbox is reachable at
+  `http://t-<thread>-p<port>.localhost:3000` (or `https://t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`
+  on a server). The web app matches the hostname and forwards the whole request,
+  WebSockets included, through core into the sandbox, where the supervisor connects to
+  `127.0.0.1:<port>` with `Host: localhost:<port>`, so dev servers that bind to
+  localhost work unchanged. Browsers resolve `*.localhost` to loopback, so nothing
+  needs configuring locally. The Portals tab lists the ports (named by an optional
+  committed `.valet/ports.json`, e.g. `{ "3000": "web" }`) and embeds one in a
+  mini-browser; the agent knows the URL template through `VALET_PORTAL_URL_TEMPLATE`.
+  With `VALET_PASSWORD` set, a portal host gets its own cookie after a redirect
+  through the main host (logging out revokes those cookies), and *Share* issues
+  links that open one portal for 1 hour to 7 days without a login. Request bodies
+  sent to a portal are limited to 256 MB.
 
 ## Project configuration
 
@@ -78,7 +105,8 @@ are available to both scripts and the agent.
 | `POSTGRES_PASSWORD` | required | Database password |
 | `VALET_SECRET_KEY` | required | Encrypts stored credentials; losing it loses them |
 | `VALET_PASSWORD` | empty | UI password; empty disables authentication |
-| `VALET_BASE_URL` | `http://localhost:3000` | Public URL used in pull request bodies |
+| `VALET_BASE_URL` | `http://localhost:3000` | Public URL used in pull request bodies and portal URLs |
+| `VALET_PORTAL_DOMAIN` | host of `VALET_BASE_URL` | Portals are served at `t-<thread>-p<port>.<domain>`; needs a wildcard DNS record on a server |
 | `VALET_BIND` | `127.0.0.1` | Host interface for the UI port |
 | `VALET_PORT` | `3000` | Host port for the UI |
 | `VALET_SANDBOX_IMAGE` | `valet-sandbox:latest` | Image threads run in |

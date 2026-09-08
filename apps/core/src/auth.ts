@@ -18,6 +18,7 @@ export class Auth {
   private readonly sessionValue: string
   private readonly password: string | null
   private readonly secure: boolean
+  private readonly logoutHooks: Array<() => Promise<void>> = []
 
   constructor(cfg: Config, cipher: Cipher) {
     this.password = cfg.VALET_PASSWORD ?? null
@@ -37,6 +38,11 @@ export class Auth {
 
   authorizedUpgrade(req: IncomingMessage): boolean {
     return this.authorizedCookieHeader(req.headers.cookie)
+  }
+
+  /** Runs on every logout. Cookies on other hosts (portals) cannot be deleted from here, only revoked. */
+  onLogout(hook: () => Promise<void>): void {
+    this.logoutHooks.push(hook)
   }
 
   middleware(): MiddlewareHandler {
@@ -72,7 +78,8 @@ export class Auth {
       }
       return c.json(body)
     })
-    app.post('/api/auth/logout', (c) => {
+    app.post('/api/auth/logout', async (c) => {
+      for (const hook of this.logoutHooks) await hook()
       deleteCookie(c, SESSION_COOKIE, { path: '/' })
       return c.body(null, 204)
     })

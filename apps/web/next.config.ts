@@ -12,7 +12,16 @@ const config: NextConfig = {
   agentRules: false,
   outputFileTracingRoot: path.join(import.meta.dirname, '../../'),
   transpilePackages: ['@valet/shared'],
-  experimental: { extensionAlias: { '.js': ['.ts', '.tsx', '.js'] } },
+  experimental: {
+    extensionAlias: { '.js': ['.ts', '.tsx', '.js'] },
+    // Idle timeout on proxied responses; the default 30 s cuts off long polling and
+    // quiet SSE streams behind portals. The schema rejects null, so use the largest
+    // value Node's socket timeout accepts.
+    proxyTimeout: 2 ** 31 - 1,
+    // Next buffers request bodies that pass through proxy.ts and truncates them at
+    // this size (default 10 MB), which breaks uploads to portal apps.
+    proxyClientMaxBodySize: '256mb',
+  },
 }
 
 export default config

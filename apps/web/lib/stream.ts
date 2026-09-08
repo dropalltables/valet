@@ -1,13 +1,15 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { emptyTranscript, reduceEvent, type StreamFrame, type Thread, type Transcript } from '@valet/shared'
+import { emptyTranscript, reduceEvent, type Portal, type StreamFrame, type Thread, type Transcript } from '@valet/shared'
 import { wsUrl } from './api'
 
 export type StreamState = {
   transcript: Transcript
   /** Thread row pushed by core; null until the first `thread` frame. */
   thread: Thread | null
+  /** Listening ports in the sandbox; replaced whole on every `portals` frame. */
+  portals: Portal[]
   /** Replay finished; events now arrive as they happen. */
   live: boolean
   connected: boolean
@@ -20,7 +22,7 @@ const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 15000
 
 function initial(): StreamState {
-  return { transcript: emptyTranscript(), thread: null, live: false, connected: false, everConnected: false, error: null }
+  return { transcript: emptyTranscript(), thread: null, portals: [], live: false, connected: false, everConnected: false, error: null }
 }
 
 /**
@@ -67,6 +69,9 @@ export function useThreadStream(threadId: string): StreamState {
             return
           case 'thread':
             setState((s) => ({ ...s, thread: frame.thread }))
+            return
+          case 'portals':
+            setState((s) => ({ ...s, portals: frame.portals }))
             return
           case 'error':
             setState((s) => ({ ...s, error: frame.message }))

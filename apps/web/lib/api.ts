@@ -16,6 +16,8 @@ import type {
   Health,
   LoginRequest,
   PermissionDecisionRequest,
+  PortalAuthUrlResponse,
+  PortalsResponse,
   Project,
   ProjectEnvResponse,
   ProjectsResponse,
@@ -27,6 +29,8 @@ import type {
   SendMessageResponse,
   SessionResponse,
   Settings,
+  SharePortalRequest,
+  SharePortalResponse,
   Thread,
   ThreadListItem,
   ThreadsResponse,
@@ -136,6 +140,13 @@ export const api = {
     changes: (id: string) => request<ChangesResponse>(`/api/threads/${id}/changes`),
     files: (id: string, path: string) => request<FilesResponse>(`/api/threads/${id}/files${q({ path })}`),
     file: (id: string, path: string) => request<FileResponse>(`/api/threads/${id}/file${q({ path })}`),
+    portals: (id: string) => request<PortalsResponse>(`/api/threads/${id}/portals`),
+    portalAuthUrl: (id: string, port: number, path: string) =>
+      request<PortalAuthUrlResponse>(`/api/threads/${id}/portals/${port}/auth${q({ path })}`),
+    sharePortal: (id: string, port: number, body: SharePortalRequest) =>
+      request<SharePortalResponse>(`/api/threads/${id}/portals/${port}/share`, { method: 'POST', body: json(body) }),
+    revokePortalShare: (id: string, port: number) =>
+      request<void>(`/api/threads/${id}/portals/${port}/share`, { method: 'DELETE' }),
     push: (id: string) => request<PushResponse>(`/api/threads/${id}/push`, { method: 'POST' }),
     createPr: (id: string, body: CreatePrRequest) =>
       request<Thread>(`/api/threads/${id}/pr`, { method: 'POST', body: json(body) }),

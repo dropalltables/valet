@@ -1,6 +1,6 @@
 import Docker from 'dockerode'
 import type { SandboxImageStatus } from '@valet/shared'
-import { SANDBOX } from '@valet/shared'
+import { PORTAL_ENV, SANDBOX } from '@valet/shared'
 import type { Config } from '../config.js'
 import { statusOf } from '../errors.js'
 
@@ -17,6 +17,8 @@ export type SandboxSpec = {
   projectId: string
   token: string
   volume: string
+  /** `http://t-<thread>-p{port}.<domain>`, exported to shells in the container. */
+  portalUrlTemplate: string
 }
 
 export type ContainerState = { id: string; running: boolean; status: string; ip: string | null }
@@ -95,7 +97,11 @@ export class DockerClient {
       Image: this.cfg.VALET_SANDBOX_IMAGE,
       name,
       Hostname: name,
-      Env: [`VALET_SUPERVISOR_TOKEN=${spec.token}`, `VALET_THREAD_ID=${spec.threadId}`],
+      Env: [
+        `VALET_SUPERVISOR_TOKEN=${spec.token}`,
+        `${PORTAL_ENV.threadId}=${spec.threadId}`,
+        `${PORTAL_ENV.urlTemplate}=${spec.portalUrlTemplate}`,
+      ],
       Labels: { [LABEL_THREAD]: spec.threadId, [LABEL_PROJECT]: spec.projectId, [LABEL_MANAGED]: 'true' },
       HostConfig: {
         NetworkMode: this.cfg.VALET_DOCKER_NETWORK,

@@ -7,6 +7,8 @@ import { handleExec } from './exec.js'
 import { fsList, fsMkdir, fsRead, fsWrite } from './fs.js'
 import { health } from './health.js'
 import { HttpError, parseJson, readBody, sendJson } from './http.js'
+import { parsePortalUrl, proxyPortalRequest, proxyPortalUpgrade } from './portal.js'
+import { listPorts } from './ports.js'
 import { handlePty } from './pty.js'
 import { RUN_BODY_LIMIT, parseRunRequest, runToCompletion } from './run.js'
 import { connectVnc, relayVnc } from './vnc.js'
@@ -32,6 +34,8 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL): Promi
       return fsWrite(url, req, res)
     case 'POST /fs/mkdir':
       return fsMkdir(req, res)
+    case 'GET /ports':
+      return sendJson(res, 200, await listPorts())
     default:
       throw new HttpError(404, 'not found')
   }
@@ -43,6 +47,12 @@ const server = createServer((req, res) => {
 
   if (!authorized(req, token)) {
     sendJson(res, 401, { error: 'unauthorized' })
+    return
+  }
+  // Portal paths keep their raw form: the app decides how to decode them.
+  const portal = parsePortalUrl(req.url ?? '/')
+  if (portal) {
+    proxyPortalRequest(portal, req, res)
     return
   }
   const url = new URL(req.url ?? '/', 'http://localhost')
@@ -76,6 +86,13 @@ server.on('upgrade', (req, socket, head) => {
   if (!authorized(req, token)) {
     rejectUpgrade(socket, 401, 'Unauthorized')
     done(401)
+    return
+  }
+
+  const portal = parsePortalUrl(req.url ?? '/')
+  if (portal) {
+    proxyPortalUpgrade(portal, req, socket, head)
+    socket.once('close', () => done(101))
     return
   }
 
