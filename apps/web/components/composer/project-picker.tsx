@@ -13,9 +13,18 @@ type Props = {
   creating: boolean
   onCreatingChange: (creating: boolean) => void
   size?: 'sm' | 'default'
+  triggerClassName?: string
 }
 
-export function ProjectPicker({ projects, value, onChange, creating, onCreatingChange, size = 'default' }: Props) {
+export function ProjectPicker({
+  projects,
+  value,
+  onChange,
+  creating,
+  onCreatingChange,
+  size = 'default',
+  triggerClassName = 'min-w-40',
+}: Props) {
   return (
     <Select
       value={creating ? NEW : (value ?? '')}
@@ -28,7 +37,7 @@ export function ProjectPicker({ projects, value, onChange, creating, onCreatingC
         onChange(v)
       }}
     >
-      <SelectTrigger size={size} aria-label="Project" className="min-w-40">
+      <SelectTrigger size={size} aria-label="Project" className={triggerClassName}>
         <SelectValue placeholder="Project" />
       </SelectTrigger>
       <SelectContent>

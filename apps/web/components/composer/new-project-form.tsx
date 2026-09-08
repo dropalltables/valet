@@ -4,8 +4,9 @@ import Link from 'next/link'
 import { useEffect, useState, type FormEvent } from 'react'
 import type { GitHubRepo, Project, ProjectSource } from '@valet/shared'
 import { LockIcon } from 'lucide-react'
-import { api, ApiError, errorMessage } from '@/lib/api'
+import { api, errorMessage } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
+import { useCredentials } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -19,6 +20,9 @@ type Props = {
   onCancel?: () => void
   className?: string
 }
+
+/** Every body state shares this height so switching tabs or sources never moves the page. */
+const BODY = 'h-56'
 
 export function NewProjectForm({ onCreated, onCancel, className }: Props) {
   const { upsertProject } = useAppData()
@@ -60,7 +64,7 @@ export function NewProjectForm({ onCreated, onCancel, className }: Props) {
   const canSubmit = source === 'github' ? repo !== null : name.trim().length > 0
 
   return (
-    <form onSubmit={submit} className={cn('flex flex-col gap-4', className)}>
+    <form onSubmit={submit} className={cn('flex flex-col gap-3', className)}>
       <Tabs value={source} onValueChange={(v) => setSource(v as ProjectSource)}>
         <TabsList>
           <TabsTrigger value="github">GitHub repository</TabsTrigger>
@@ -68,61 +72,72 @@ export function NewProjectForm({ onCreated, onCancel, className }: Props) {
         </TabsList>
       </Tabs>
 
-      {source === 'github' ? (
-        <>
-          <RepoSearch selected={repo} onSelect={pickRepo} />
-          {repo && (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="project-name">Name</Label>
-                <Input id="project-name" value={name} onChange={(e) => setName(e.target.value)} />
+      <div className={cn(BODY, 'flex flex-col gap-3')}>
+        {source === 'github' ? (
+          <>
+            <RepoSearch selected={repo} onSelect={pickRepo} className={repo ? 'h-36' : 'h-full'} />
+            {repo && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="project-name">Name</Label>
+                  <Input id="project-name" value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="project-branch">Default branch</Label>
+                  <Input
+                    id="project-branch"
+                    value={defaultBranch}
+                    onChange={(e) => setDefaultBranch(e.target.value)}
+                    className="font-mono"
+                  />
+                </div>
               </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="project-branch">Default branch</Label>
-                <Input
-                  id="project-branch"
-                  value={defaultBranch}
-                  onChange={(e) => setDefaultBranch(e.target.value)}
-                  className="font-mono"
-                />
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="project-name">Name</Label>
-          <Input id="project-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        </div>
-      )}
-
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
+            )}
+          </>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="project-name">Name</Label>
+            <Input id="project-name" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          </div>
+        )}
+      </div>
 
       <div className="flex items-center gap-2">
-        <Button type="submit" disabled={!canSubmit || busy}>
+        <Button type="submit" size="sm" disabled={!canSubmit || busy}>
           Create project
         </Button>
         {onCancel && (
-          <Button type="button" variant="ghost" onClick={onCancel}>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
+        )}
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
         )}
       </div>
     </form>
   )
 }
 
-function RepoSearch({ selected, onSelect }: { selected: GitHubRepo | null; onSelect: (r: GitHubRepo) => void }) {
+function RepoSearch({
+  selected,
+  onSelect,
+  className,
+}: {
+  selected: GitHubRepo | null
+  onSelect: (r: GitHubRepo) => void
+  className?: string
+}) {
+  const { data: credentials } = useCredentials()
+  const github = credentials?.find((c) => c.kind === 'github')
   const [query, setQuery] = useState('')
   const [repos, setRepos] = useState<GitHubRepo[] | null>(null)
-  const [state, setState] = useState<'loading' | 'ready' | 'unconfigured' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!github?.configured) return
     let cancelled = false
     const timer = setTimeout(() => {
       api.credentials
@@ -130,41 +145,40 @@ function RepoSearch({ selected, onSelect }: { selected: GitHubRepo | null; onSel
         .then((r) => {
           if (cancelled) return
           setRepos(r.repos)
-          setState('ready')
+          setError(null)
         })
         .catch((err: unknown) => {
-          if (cancelled) return
-          if (err instanceof ApiError && (err.status === 400 || err.status === 409 || err.status === 412)) {
-            setState('unconfigured')
-          } else {
-            setError(errorMessage(err))
-            setState('error')
-          }
+          if (!cancelled) setError(errorMessage(err))
         })
     }, 200)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [query])
+  }, [query, github?.configured])
 
-  if (state === 'unconfigured') {
+  // Same box in every state: unknown yet, not configured, or searching.
+  if (!github || !github.configured) {
     return (
-      <div className="flex items-center gap-3 text-sm">
-        <span className="text-muted-foreground">GitHub: Not configured</span>
-        <Button asChild size="sm" variant="outline">
-          <Link href="/settings">Settings</Link>
-        </Button>
+      <div className={cn('flex items-center justify-center gap-3 rounded-md border text-sm', className)}>
+        {github && (
+          <>
+            <span className="text-muted-foreground">GitHub not configured</span>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/settings">Settings</Link>
+            </Button>
+          </>
+        )}
       </div>
     )
   }
 
   return (
-    <Command shouldFilter={false} className="rounded-md border">
+    <Command shouldFilter={false} className={cn('rounded-md border', className)}>
       <CommandInput placeholder="Search repositories" value={query} onValueChange={setQuery} />
-      <CommandList className="max-h-56">
-        {state === 'error' && <CommandEmpty>{error}</CommandEmpty>}
-        {state === 'ready' && repos?.length === 0 && <CommandEmpty>No repositories</CommandEmpty>}
+      <CommandList className="max-h-none flex-1">
+        {error && <CommandEmpty>{error}</CommandEmpty>}
+        {!error && repos?.length === 0 && <CommandEmpty>No repositories</CommandEmpty>}
         {repos?.map((r) => (
           <CommandItem
             key={r.fullName}

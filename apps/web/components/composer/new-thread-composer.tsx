@@ -29,6 +29,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { useAppData } from '@/components/app/data-provider'
 import { AttachmentStrip } from '@/components/composer/attachments'
 import { DropOverlay } from '@/components/composer/drop-overlay'
+import { cn } from '@/lib/utils'
+
+/** Text-only controls inside the tab; the tab supplies the surface. */
+const TAB_TRIGGER = 'h-7 border-0 bg-transparent px-2 shadow-none hover:bg-background/70 dark:bg-transparent dark:hover:bg-background/40'
 import { NewProjectForm } from '@/components/composer/new-project-form'
 import { ProjectPicker } from '@/components/composer/project-picker'
 
@@ -125,9 +129,9 @@ function Composer() {
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Where the thread runs: its own row above the box, like Codex and Claude. */}
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col">
+      {/* Folder tab on the box: where the thread runs. Project left, branch right. */}
+      <div className="mx-3 flex items-center justify-between gap-2 rounded-t-lg border border-b-0 border-input bg-muted/60 px-1.5 py-1">
         <ProjectPicker
           projects={projects}
           value={projectId}
@@ -135,20 +139,35 @@ function Composer() {
           creating={creatingProject}
           onCreatingChange={setCreatingProject}
           size="sm"
+          triggerClassName={cn(TAB_TRIGGER, 'font-medium')}
         />
-        <PromptInputSelect value={effectiveBranch ?? ''} onValueChange={setBaseBranch} disabled={!project}>
-          <PromptInputSelectTrigger size="sm" aria-label="Base branch" className="font-mono text-xs">
-            <PromptInputSelectValue placeholder="Branch" />
-          </PromptInputSelectTrigger>
-          <PromptInputSelectContent>
-            {branches.map((b) => (
-              <PromptInputSelectItem key={b} value={b} className="font-mono text-xs">
-                {b}
-              </PromptInputSelectItem>
-            ))}
-          </PromptInputSelectContent>
-        </PromptInputSelect>
+        {creatingProject ? (
+          <span className="px-2 text-xs text-muted-foreground">New project</span>
+        ) : (
+          <PromptInputSelect value={effectiveBranch ?? ''} onValueChange={setBaseBranch} disabled={!project}>
+            <PromptInputSelectTrigger size="sm" aria-label="Base branch" className={cn(TAB_TRIGGER, 'font-mono text-xs')}>
+              <PromptInputSelectValue placeholder="Branch" />
+            </PromptInputSelectTrigger>
+            <PromptInputSelectContent align="end">
+              {branches.map((b) => (
+                <PromptInputSelectItem key={b} value={b} className="font-mono text-xs">
+                  {b}
+                </PromptInputSelectItem>
+              ))}
+            </PromptInputSelectContent>
+          </PromptInputSelect>
+        )}
       </div>
+      {creatingProject ? (
+        <NewProjectForm
+          className="rounded-lg border bg-background p-3"
+          onCreated={(p) => {
+            setCreatingProject(false)
+            setProjectId(p.id)
+          }}
+          onCancel={() => setCreatingProject(false)}
+        />
+      ) : (
       <PromptInput onSubmit={submit} accept="image/*" multiple globalDrop className="flex flex-col">
         <DropOverlay />
         <AttachmentStrip />
@@ -229,16 +248,6 @@ function Composer() {
           </div>
         </PromptInputFooter>
       </PromptInput>
-      {/* Outside the PromptInput: forms cannot nest. */}
-      {creatingProject && (
-        <NewProjectForm
-          className="rounded-md border p-4"
-          onCreated={(p) => {
-            setCreatingProject(false)
-            setProjectId(p.id)
-          }}
-          onCancel={() => setCreatingProject(false)}
-        />
       )}
     </div>
   )
