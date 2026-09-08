@@ -149,8 +149,9 @@ pre.file-view {
   counter-reset: line;
   display: block;
 }
+/* Inline, not block: inside <pre> the newline after each span already breaks the
+   line, and a block span plus a preserved newline renders every line twice as tall. */
 .file-view .line {
-  display: block;
   padding-right: 0.75rem;
 }
 .file-view .line::before {
