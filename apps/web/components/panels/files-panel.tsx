@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import useSWR from 'swr'
 import { useTheme } from 'next-themes'
-import { LIVE_STATUSES, formatBytes, type FileEntry, type ThreadListItem } from '@valet/shared'
+import { LIVE_STATUSES, formatBytes, imageMediaType, type FileEntry, type ThreadListItem } from '@valet/shared'
 import { FileIcon, FolderIcon, XIcon } from 'lucide-react'
 import { api } from '@/lib/api'
 import { highlight } from '@/lib/highlight'
@@ -144,6 +144,20 @@ function FileViewer({ threadId, path }: { threadId: string; path: string }) {
     )
   }
   if (!data) return null
+  // Images come back without content (binary), or not at all when they pass the read limit.
+  if (imageMediaType(path)) {
+    if (data.truncated) return <p className="p-4 text-sm text-muted-foreground">Image, {formatBytes(data.size)}</p>
+    return (
+      <div className="flex flex-col items-center gap-2 p-4">
+        <img
+          src={api.threads.fileRawUrl(threadId, path)}
+          alt={path}
+          className="max-h-[calc(100vh-14rem)] max-w-full object-contain"
+        />
+        <p className="text-xs text-muted-foreground">{formatBytes(data.size)}</p>
+      </div>
+    )
+  }
   if (data.binary) return <p className="p-4 text-sm text-muted-foreground">Binary file, {formatBytes(data.size)}</p>
 
   return (

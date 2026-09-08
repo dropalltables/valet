@@ -795,13 +795,24 @@ function changesResponse() {
   }
 }
 
+/** Real bytes, so the Files tab renders the image rather than a description of one. */
+const LOGO_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAAAAAC8b2d3AAACpklEQVR42u3Qw5YQAAAAwA7Ztjfbtq3Ntm27NtuuzbZt27btOvUPdeq9mU+YEHH5JyEUCBQoUCD/GBgyVOgwYcKGCx8hQsRIkaNEiRoteowYMWPFjhMnbrz4CRIkTJQ4SZKkyZIHBKRImSp16jRp06VPnyFjpsyZs2TNlj17jpy5cufOkzdf/vwFChYqXLhI0WLFi5coWap06TJly5UvX6FipcqVq1StFhhYvUbNWrVq16lbr179Bg0bNWrcpGmzZs1btGzVqnWbtu3ate/QsVOnzl26duvWvUfPXr169+nbr1//AQMHDRo8ZOiwYcNHjAwKGjV6zNix48ZPmDhx0uQpU6dOmz5j5sxZs+fMnTtv/oKFCxctXhIcvHTZ8hUrVq5avWbN2nXrN2zYuGnzli1bt23fsWPnrt179uzdt//AgYOHDh85cvTY8RMnTp46febM2XPnL1y4eOnylStXr12/cePmrdt37ty9d//Bg4ePHj958vTZ8xcvXr56/ebN23fvP3z4+Onzly9fv33/8ePnr98CBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIECBQoUKFCgQIH/ayB/S6BAgQIF8tf+AFMTd//vbI1fAAAAAElFTkSuQmCC',
+  'base64',
+)
+const ICON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" fill="none" stroke="#888" stroke-width="4"/></svg>\n'
+const LOCKB = Buffer.concat([Buffer.from('bun-lockfile-format-v0\0'), Buffer.alloc(2048)])
+
 const FILE_TREE = {
   '': [
     { name: 'apps', path: 'apps', kind: 'dir', size: null },
     { name: 'packages', path: 'packages', kind: 'dir', size: null },
     { name: 'README.md', path: 'README.md', kind: 'file', size: 5144 },
     { name: 'package.json', path: 'package.json', kind: 'file', size: 830 },
-    { name: 'logo.png', path: 'logo.png', kind: 'file', size: 48211 },
+    { name: 'bun.lockb', path: 'bun.lockb', kind: 'file', size: LOCKB.length },
+    { name: 'icon.svg', path: 'icon.svg', kind: 'file', size: Buffer.byteLength(ICON_SVG) },
+    { name: 'logo.png', path: 'logo.png', kind: 'file', size: LOGO_PNG.length },
   ],
   apps: [
     { name: 'core', path: 'apps/core', kind: 'dir', size: null },
@@ -817,7 +828,12 @@ const FILE_TREE = {
   'packages/shared': [],
 }
 
+const BINARY_FILES = { 'logo.png': LOGO_PNG, 'bun.lockb': LOCKB }
+
+const MEDIA_TYPES = { png: 'image/png', svg: 'image/svg+xml', ico: 'image/x-icon' }
+
 const FILES = {
+  'icon.svg': ICON_SVG,
   'README.md': '# Valet\n\nSelf-hosted cloud coding agents.\n\n## Install\n\n```sh\ndocker compose up -d\n```\n',
   'package.json': '{\n  "name": "valet",\n  "private": true,\n  "workspaces": ["packages/*", "apps/*"]\n}\n',
   'apps/core/src/threads.ts': `import type { Db, Thread } from './db.js'
@@ -1298,7 +1314,15 @@ async function handle(req, res) {
       case 'file': {
         if (!LIVE.has(t.row.status)) return fail(res, 409, t.row.status)
         const p = (url.searchParams.get('path') ?? '').replace(/^\/+/, '')
-        if (p === 'logo.png') return send(res, 200, { path: p, content: null, truncated: false, binary: true, size: 48211 })
+        if (seg[4] === 'raw') {
+          const bytes = BINARY_FILES[p] ?? (FILES[p] === undefined ? null : Buffer.from(FILES[p]))
+          if (!bytes) return fail(res, 404, 'No such file')
+          const type = MEDIA_TYPES[p.slice(p.lastIndexOf('.') + 1).toLowerCase()] ?? 'application/octet-stream'
+          res.writeHead(200, { 'content-type': type, 'content-length': bytes.length, 'cache-control': 'no-store' })
+          return res.end(bytes)
+        }
+        const blob = BINARY_FILES[p]
+        if (blob) return send(res, 200, { path: p, content: null, truncated: false, binary: true, size: blob.length })
         const content = FILES[p]
         if (content === undefined) return fail(res, 404, 'No such file')
         // README.md simulates a file bigger than the read limit: the tree lists its real

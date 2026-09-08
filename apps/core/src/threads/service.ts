@@ -5,6 +5,7 @@ import {
   PORTAL_ENV,
   SANDBOX,
   formatBytes,
+  imageMediaType,
   slugify,
   type ChangesResponse,
   type CreatePrRequest,
@@ -1101,6 +1102,16 @@ export class ThreadService {
     if (binary) return { path: rel, content: null, truncated: false, binary: true, size: raw.length }
     const truncated = raw.length > FILE_CONTENT_LIMIT
     return { path: rel, content: (truncated ? raw.subarray(0, FILE_CONTENT_LIMIT) : raw).toString('utf8'), truncated, binary: false, size: raw.length }
+  }
+
+  /** The file's bytes, for what the browser renders itself. 413 above the sandbox's 5 MB read limit. */
+  async fileRaw(id: string, path: string): Promise<{ bytes: Buffer; mediaType: string }> {
+    const { abs, rel } = this.repoPath(path)
+    if (!rel) throw badRequest('path is required')
+    const { supervisor } = await this.requireRunning(id)
+    const bytes = await supervisor.fsRead(abs)
+    if (!bytes) throw notFound('file')
+    return { bytes, mediaType: imageMediaType(rel) ?? 'application/octet-stream' }
   }
 
   /** Upstream socket for the pty/vnc relays; 409 when the container is not running. */

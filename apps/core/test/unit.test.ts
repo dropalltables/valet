@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import { test } from 'node:test'
 import zlib from 'node:zlib'
 import type Docker from 'dockerode'
-import { formatBytes } from '@valet/shared'
+import { formatBytes, imageMediaType } from '@valet/shared'
 import { normalizeClaudeTool } from '../src/agents/tool-names.js'
 import { parseCookie } from '../src/auth.js'
 import { parseSize } from '../src/config.js'
@@ -66,6 +66,16 @@ test('byte formatting', () => {
   assert.equal(formatBytes(512 * 1024 ** 2), '512 MB')
   assert.equal(formatBytes(486.4 * 1024 ** 2), '486 MB')
   assert.equal(formatBytes(0), '0 B')
+})
+
+test('image media types', () => {
+  assert.equal(imageMediaType('assets/Logo.PNG'), 'image/png')
+  assert.equal(imageMediaType('a/b/photo.jpeg'), 'image/jpeg')
+  assert.equal(imageMediaType('icon.svg'), 'image/svg+xml')
+  assert.equal(imageMediaType('apps/core/src/threads.ts'), null)
+  assert.equal(imageMediaType('png'), null)
+  assert.equal(imageMediaType('.png'), null)
+  assert.equal(imageMediaType('dir.png/notes'), null)
 })
 
 test('out-of-memory containers', () => {

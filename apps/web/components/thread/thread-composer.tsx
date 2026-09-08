@@ -5,7 +5,6 @@ import { MESSAGEABLE_STATUSES, type ThreadStatus } from '@valet/shared'
 import { ImageIcon, SquareIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import { STATUS_LABELS } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
   PromptInput,
@@ -77,13 +76,11 @@ function Composer({ threadId, status }: { threadId: string; status: ThreadStatus
         <PromptInputTextarea
           disabled={!accepts || busy}
           placeholder={
-            !accepts
-              ? STATUS_LABELS[status]
-              : effectiveMode === 'steer'
-                ? 'Steer the running turn'
-                : status === 'paused'
-                  ? 'Message (wakes the sandbox)'
-                  : 'Message'
+            effectiveMode === 'steer'
+              ? 'Steer the running turn'
+              : status === 'paused'
+                ? 'Message (wakes the sandbox)'
+                : 'Message'
           }
           className="min-h-12"
         />
@@ -109,7 +106,6 @@ function Composer({ threadId, status }: { threadId: string; status: ThreadStatus
                 ))}
               </div>
             )}
-            {!accepts && <span className="px-1 text-xs text-muted-foreground">{STATUS_LABELS[status]}</span>}
           </PromptInputTools>
           <div className="flex items-center gap-1">
             {running && (

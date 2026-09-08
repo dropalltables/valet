@@ -519,6 +519,19 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/threads/:id/changes', async (c) => c.json(await deps.threads.changes(c.req.param('id'))))
   app.get('/api/threads/:id/files', async (c) => c.json(await deps.threads.files(c.req.param('id'), c.req.query('path') ?? '')))
   app.get('/api/threads/:id/file', async (c) => c.json(await deps.threads.file(c.req.param('id'), c.req.query('path') ?? '')))
+  // Repository bytes on the app's own origin: a hostile SVG must not run as a document,
+  // so the type is never sniffed and the response may load nothing of its own.
+  app.get('/api/threads/:id/file/raw', async (c) => {
+    const { bytes, mediaType } = await deps.threads.fileRaw(c.req.param('id'), c.req.query('path') ?? '')
+    return new Response(bytes, {
+      headers: {
+        'content-type': mediaType,
+        'content-security-policy': "default-src 'none'; sandbox",
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'no-store',
+      },
+    })
+  })
 
   app.get('/api/threads/:id/portals', async (c) => {
     const body: PortalsResponse = { portals: await deps.threads.portals(c.req.param('id')) }

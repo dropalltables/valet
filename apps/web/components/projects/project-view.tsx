@@ -242,6 +242,7 @@ type EnvDraft = { name: string; value: string; kind: 'plain' | 'secret'; origina
 function EnvVars({ projectId }: { projectId: string }) {
   const { data, error, mutate } = useSWR(['env', projectId], () => api.projects.env.get(projectId))
   const [draft, setDraft] = useState<EnvDraft | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const vars = data?.vars ?? []
 
@@ -277,6 +278,7 @@ function EnvVars({ projectId }: { projectId: string }) {
 
   async function remove(name: string): Promise<void> {
     await put(vars.filter((v) => v.name !== name).map(keep))
+    setConfirmRemove(null)
   }
 
   return (
@@ -316,7 +318,7 @@ function EnvVars({ projectId }: { projectId: string }) {
                   >
                     Edit
                   </Button>
-                  <Button size="xs" variant="ghost" disabled={busy} onClick={() => void remove(v.name)}>
+                  <Button size="xs" variant="ghost" disabled={busy} onClick={() => setConfirmRemove(v.name)}>
                     Delete
                   </Button>
                 </TableCell>
@@ -325,6 +327,25 @@ function EnvVars({ projectId }: { projectId: string }) {
           </TableBody>
         </Table>
       )}
+
+      <AlertDialog open={confirmRemove !== null} onOpenChange={(open) => !open && setConfirmRemove(null)}>
+        <AlertDialogContent>
+          {confirmRemove !== null && (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete variable</AlertDialogTitle>
+                <AlertDialogDescription className="font-mono text-xs">{confirmRemove}</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction variant="destructive" disabled={busy} onClick={() => void remove(confirmRemove)}>
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
         <DialogContent>

@@ -326,6 +326,11 @@ export type ChangesResponse = {
 export type FilesResponse = { path: string; entries: FileEntry[] }
 /** GET /api/threads/:id/file?path=<file> -> { path, content, truncated, binary } (content omitted when binary) */
 export type FileResponse = { path: string; content: string | null; truncated: boolean; binary: boolean; size: number }
+/**
+ * GET /api/threads/:id/file/raw?path=<file> -> the bytes, typed from the extension
+ * (`imageMediaType`, else `application/octet-stream`). Same paused/archived 409 and
+ * path rules as `/file`; 413 above the sandbox's 5 MB read limit. Used as an `img` src.
+ */
 
 /**
  * POST /api/threads/:id/push -> { branch, pushed: true }

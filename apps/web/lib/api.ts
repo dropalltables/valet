@@ -184,6 +184,8 @@ export const api = {
     changes: (id: string) => request<ChangesResponse>(`/api/threads/${id}/changes`),
     files: (id: string, path: string) => request<FilesResponse>(`/api/threads/${id}/files${q({ path })}`),
     file: (id: string, path: string) => request<FileResponse>(`/api/threads/${id}/file${q({ path })}`),
+    /** The bytes themselves, for elements that fetch their own source. */
+    fileRawUrl: (id: string, path: string) => `/api/threads/${id}/file/raw${q({ path })}`,
     portals: (id: string) => request<PortalsResponse>(`/api/threads/${id}/portals`),
     portalAuthUrl: (id: string, port: number, path: string) =>
       request<PortalAuthUrlResponse>(`/api/threads/${id}/portals/${port}/auth${q({ path })}`),

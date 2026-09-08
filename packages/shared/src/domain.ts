@@ -351,6 +351,26 @@ export type FileEntry = {
   size: number | null
 }
 
+const IMAGE_MEDIA_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+  bmp: 'image/bmp',
+  avif: 'image/avif',
+}
+
+/** The image media type a file name's extension implies, or null. Core sends it, the Files tab renders it. */
+export function imageMediaType(path: string): string | null {
+  const name = path.slice(path.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  if (dot < 1) return null
+  return IMAGE_MEDIA_TYPES[name.slice(dot + 1).toLowerCase()] ?? null
+}
+
 /**
  * Credentials live in the database, encrypted with `VALET_SECRET_KEY`. The API
  * only ever reports whether one exists plus a masked hint.
