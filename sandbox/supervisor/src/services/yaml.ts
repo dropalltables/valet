@@ -13,6 +13,7 @@ import { RESERVED_SERVICE_ENV, serviceNameSchema, type ServicePortal } from '@va
  *       port: 3000                    # else assigned when portal or health is set
  *       portal: true                  # or { path: /docs, title: Docs, description: ... }
  *       health: /healthz              # GET must answer 2xx/3xx
+ *       review: false                 # keep the portal review widget out of this service's pages
  *       env:
  *         API_URL: ${services.api.publicURL}
  */
@@ -32,6 +33,7 @@ const declaredSchema = z
     env: z.record(z.string(), envValue).optional(),
     portal: portalSchema.optional(),
     health: z.string().startsWith('/').optional(),
+    review: z.boolean().optional(),
   })
   .strict()
 
@@ -46,6 +48,7 @@ export type Declared = {
   env: Record<string, string>
   portal: ServicePortal
   health: string | null
+  review: boolean
 }
 
 const REFERENCE_RE = /\$\{services\.([^.}]+)\.([^}]+)\}/g
@@ -92,6 +95,7 @@ export function parseServicesYaml(text: string, repo: string): Declared[] {
       env,
       portal,
       health: spec.health ?? null,
+      review: spec.review ?? true,
     })
   }
   checkReferences(declared)

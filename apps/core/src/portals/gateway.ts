@@ -8,18 +8,24 @@ import {
   PORTAL_APP_AUTHORIZATION_HEADER,
   PORTAL_AUTH_PATH,
   PORTAL_ERROR_HEADER,
+  PORTAL_REVIEW_HEADER,
+  PORTAL_REVIEW_PATH,
+  PORTAL_REVIEW_SCRIPT_PATH,
   PORTAL_WAKE_PATH,
   type PortalAuthUrlResponse,
   type ShareHours,
   type SharePortalResponse,
 } from '@valet/shared'
+import { z } from 'zod'
 import type { Auth } from '../auth.js'
 import type { Config } from '../config.js'
 import type { SupervisorClient } from '../docker/supervisor-client.js'
+import { HttpError } from '../errors.js'
 import { errorMessage, logger } from '../logger.js'
 import type { ThreadService } from '../threads/service.js'
 import { OWNER_TOKEN_TTL_MS, PORTAL_COOKIE, type PortalAuth, type PortalGrant } from './auth.js'
 import { deniedPage, errorPage, notFoundPage, pausedPage, unavailablePage } from './pages.js'
+import { MAX_HTML_BYTES, REVIEW_WIDGET_JS, allowInjectedScript, decodeHtml, injectWidget, isInjectableHtml, reviewMessage } from './review.js'
 import type { PortalUrls } from './urls.js'
 
 const log = logger('portals')
@@ -35,6 +41,7 @@ const LOOPBACK_ORIGIN_RE = /^(https?):\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']
 /** Statuses whose response carries no body; `new Response` throws when given one. */
 const BODYLESS_STATUS = new Set([101, 204, 205, 304])
+const reviewSchema = z.object({ selector: z.string().max(2000), path: z.string().max(2000), excerpt: z.string().max(200), note: z.string().trim().min(1).max(4000) })
 /** Connection-level failures: nothing answered at the supervisor's address. */
 const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT'])
 
@@ -160,6 +167,73 @@ function connectTimeout(req: ClientRequest): void {
   })
 }
 
+type Read = { kind: 'whole'; body: Buffer } | { kind: 'partial'; head: Buffer[] }
+
+/** The whole body, or the chunks read so far once it grows past `cap`, leaving the rest unread. */
+function readCapped(res: IncomingMessage, cap: number): Promise<Read> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    const stop = (): void => {
+      res.off('data', onData)
+      res.off('end', onEnd)
+      res.off('close', onClose)
+      res.off('error', onError)
+    }
+    const onData = (chunk: Buffer): void => {
+      chunks.push(chunk)
+      size += chunk.byteLength
+      if (size <= cap) return
+      stop()
+      res.pause()
+      resolve({ kind: 'partial', head: chunks })
+    }
+    const onEnd = (): void => {
+      stop()
+      resolve({ kind: 'whole', body: Buffer.concat(chunks) })
+    }
+    // The browser going away destroys the request, and with it this response mid-body.
+    const onClose = (): void => {
+      stop()
+      reject(new Error('the sandbox closed the response'))
+    }
+    const onError = (err: Error): void => {
+      stop()
+      reject(err)
+    }
+    res.on('data', onData)
+    res.on('end', onEnd)
+    res.on('close', onClose)
+    res.on('error', onError)
+  })
+}
+
+/** What was read before the cap, then the rest of the response as it arrives. */
+async function* resume(head: Buffer[], rest: IncomingMessage): AsyncGenerator<Buffer> {
+  for (const chunk of head) yield chunk
+  for await (const chunk of rest) yield chunk as Buffer
+}
+
+/**
+ * The response body with the review widget's script tag in it. Injection has to buffer
+ * (the tag moves `</body>` and Content-Length), so it runs only for an owner's HTML
+ * documents; every other response keeps the streaming path. A body that cannot be
+ * decoded is passed through exactly as it arrived, and one that outgrows the cap goes
+ * back to streaming rather than filling core's heap with an app's endless page.
+ */
+async function injectReview(res: IncomingMessage, headers: Headers): Promise<Buffer | ReadableStream> {
+  const declared = Number(headers.get('content-length'))
+  if (Number.isInteger(declared) && declared > MAX_HTML_BYTES) return Readable.toWeb(res) as ReadableStream
+  const read = await readCapped(res, MAX_HTML_BYTES)
+  if (read.kind === 'partial') return Readable.toWeb(Readable.from(resume(read.head, res))) as ReadableStream
+  const html = decodeHtml(read.body, headers.get('content-encoding'))
+  if (html === null) return read.body
+  const out = Buffer.from(injectWidget(html, allowInjectedScript(headers)), 'utf8')
+  headers.delete('content-encoding')
+  headers.set('content-length', String(out.byteLength))
+  return out
+}
+
 /** Sends the request and resolves on the first response; rejects when nothing answers. */
 function sendUpstream(req: ClientRequest, body: Readable | null): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
@@ -275,8 +349,33 @@ export class PortalGateway {
       return c.redirect('/', 303)
     }
 
+    if (path === PORTAL_REVIEW_SCRIPT_PATH) {
+      if (c.req.method !== 'GET' || grant !== 'owner') return c.html(notFoundPage(), 404)
+      return new Response(REVIEW_WIDGET_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' } })
+    }
+    if (path === PORTAL_REVIEW_PATH) {
+      if (c.req.method !== 'POST') return c.html(notFoundPage(), 404)
+      if (grant !== 'owner') return c.json({ error: 'only the owner can comment' }, 403)
+      return this.review(c, route)
+    }
+
     if (target.kind === 'stopped') return c.html(pausedPage(grant === 'owner'), 503)
-    return this.proxyHttp(c, route, target.supervisor, grant)
+    // A service can keep the widget out of its own pages; anything not declared in services.yaml has it.
+    const review = grant === 'owner' && target.row.services?.find((s) => s.port === route.port)?.review !== false
+    return this.proxyHttp(c, route, target.supervisor, grant, review)
+  }
+
+  /** A widget comment, sent to the thread as a user message: steering the running turn, else queued behind it. */
+  private async review(c: Ctx, route: Route): Promise<Response> {
+    const parsed = reviewSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid comment' }, 400)
+    try {
+      await this.deps.threads.sendMessage(route.threadId, { text: reviewMessage(parsed.data), mode: 'steer' })
+      return c.body(null, 204)
+    } catch (err) {
+      if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400)
+      throw err
+    }
   }
 
   /**
@@ -284,7 +383,7 @@ export class PortalGateway {
    * through with its Content-Length intact (undici's fetch would re-chunk it and
    * reject `Expect`), and the response streams back unbuffered for SSE.
    */
-  private async proxyHttp(c: Ctx, route: Route, supervisor: SupervisorClient, grant: PortalGrant): Promise<Response> {
+  private async proxyHttp(c: Ctx, route: Route, supervisor: SupervisorClient, grant: PortalGrant, review: boolean): Promise<Response> {
     const target = supervisor.portalTarget(route.port, route.rest)
     const headers = forwardHeaders(c.req.raw.headers, {
       route,
@@ -299,6 +398,9 @@ export class PortalGateway {
     })
     const { incoming } = c.env
     const method = c.req.method
+    // Whether this response can be injected into is only known once it arrives, but the
+    // encoding must be asked for now; documents are the only requests that can qualify.
+    if (review && method === 'GET' && (c.req.header('accept') ?? '').includes('text/html')) outgoing['accept-encoding'] = 'identity'
     const upstream = httpRequest({
       host: target.url.hostname,
       port: target.url.port,
@@ -331,9 +433,16 @@ export class PortalGateway {
     const status = res.statusCode ?? 502
     const resHeaders = responseHeaders(res)
     rewriteResponseHeaders(resHeaders, route, this.deps.urls)
-    const body = BODYLESS_STATUS.has(status) || method === 'HEAD' ? null : (Readable.toWeb(res) as ReadableStream)
+    const off = resHeaders.get(PORTAL_REVIEW_HEADER) === 'off'
+    resHeaders.delete(PORTAL_REVIEW_HEADER)
+    const bodyless = BODYLESS_STATUS.has(status) || method === 'HEAD'
+    const init = { status, statusText: res.statusMessage ?? '', headers: resHeaders }
+    if (!bodyless && review && !off && method === 'GET' && isInjectableHtml(resHeaders)) {
+      return new Response(await injectReview(res, resHeaders), init)
+    }
+    const body = bodyless ? null : (Readable.toWeb(res) as ReadableStream)
     if (!body) res.resume()
-    return new Response(body, { status, statusText: res.statusMessage ?? '', headers: resHeaders })
+    return new Response(body, init)
   }
 
   /**

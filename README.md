@@ -97,6 +97,12 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   through the main host (logging out revokes those cookies), and *Share* issues
   links that open one portal for 1 hour to 7 days without a login. Request bodies
   sent to a portal are limited to 256 MB.
+- **Review.** HTML pages a portal serves to you (not to share links) get a *Comment*
+  button: pick an element, write a note, and it arrives in the thread as a message
+  naming the page, the element's selector, and its text. Turn it off for a service
+  with `review: false` in `.valet/services.yaml`, or per response with an
+  `x-valet-review: off` header from the app. A page that sets `connect-src` must
+  allow `'self'` for the button to send.
 
 ## Project configuration
 
@@ -119,6 +125,7 @@ services:
     cwd: apps/web            # default: the repository root
     portal: true             # or { path: /docs, title: Docs }
     health: /                # GET must answer 2xx/3xx before the service counts as ready
+    review: false            # keep the Comment button out of this service's pages
   api:
     command: uv run uvicorn app:app --port $PORT
     port: 8000               # default: assigned from 30000-32767

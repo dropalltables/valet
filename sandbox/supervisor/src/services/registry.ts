@@ -16,6 +16,8 @@ export const registryEntrySchema = z.object({
   port: z.number().nullable(),
   portal: servicePortalSchema,
   health: z.string().nullable(),
+  /** Defaulted so a registry written before the review widget existed still loads. */
+  review: z.boolean().default(true),
   source: z.enum(['adhoc', 'yaml']),
   /** Hash of the declared spec for `yaml` services; `ensure` restarts the unit when it changes. */
   specHash: z.string().nullable(),

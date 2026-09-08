@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import { test } from 'node:test'
+import zlib from 'node:zlib'
 import { normalizeClaudeTool } from '../src/agents/tool-names.js'
 import { parseCookie } from '../src/auth.js'
 import { parseSize } from '../src/config.js'
@@ -8,7 +9,9 @@ import { parseDeviceLoginOutput } from '../src/credentials/device-login.js'
 import { maskToken } from '../src/credentials/store.js'
 import { Cipher, timingSafeEqualStrings } from '../src/crypto.js'
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
+import { servicesReplySchema } from '@valet/shared'
 import { parseGitHubUrl } from '../src/git/github.js'
+import { MAX_HTML_BYTES, allowInjectedScript, decodeHtml, injectWidget, isInjectableHtml, reviewMessage } from '../src/portals/review.js'
 import { titleFromPrompt } from '../src/threads/mapper.js'
 
 test('cipher round trip and tamper detection', () => {
@@ -121,4 +124,98 @@ test('cookie parsing survives malformed percent-encoding', () => {
   assert.deepEqual(parseCookie('a=1; valet_session=%E0%A4%A; b=%20x'), { a: '1', valet_session: '%E0%A4%A', b: ' x' })
   assert.deepEqual(parseCookie(undefined), {})
   assert.deepEqual(parseCookie('novalue; =x; k=v=w'), { k: 'v=w' })
+})
+
+test('review widget script tag placement', () => {
+  assert.equal(injectWidget('<html><body>hi</BODY></html>', null), '<html><body>hi<script src="/__valet/review.js" defer></script></BODY></html>')
+  assert.equal(injectWidget('<p>fragment</p>', 'n1'), '<p>fragment</p><script src="/__valet/review.js" defer nonce="n1"></script>')
+  // The last close wins, so a `</body>` inside markup does not take the tag with it.
+  assert.equal(
+    injectWidget('<body><iframe srcdoc="&lt;/body&gt;"></iframe></body>', null),
+    '<body><iframe srcdoc="&lt;/body&gt;"></iframe><script src="/__valet/review.js" defer></script></body>',
+  )
+  // `'\u0130'.toLowerCase()` is two characters, so a lowercased copy would splice at the wrong offset.
+  assert.equal(injectWidget('<p>\u0130stanbul</p></body>', null), '<p>\u0130stanbul</p><script src="/__valet/review.js" defer></script></body>')
+})
+
+test('review widget nonce goes into the directive that governs scripts', () => {
+  const none = new Headers()
+  assert.equal(allowInjectedScript(none), null)
+
+  const scriptSrc = new Headers({ 'content-security-policy': "default-src 'self'; script-src 'self' https://cdn.example; img-src *" })
+  const nonce = allowInjectedScript(scriptSrc)
+  assert.ok(nonce)
+  assert.equal(scriptSrc.get('content-security-policy'), `default-src 'self'; script-src 'self' https://cdn.example 'nonce-${nonce}'; img-src *`)
+
+  const fallback = new Headers({ 'content-security-policy': "default-src 'none'; img-src *" })
+  const fallbackNonce = allowInjectedScript(fallback)
+  assert.equal(fallback.get('content-security-policy'), `default-src 'nonce-${fallbackNonce}'; img-src *`)
+
+  const unrestricted = new Headers({ 'content-security-policy': 'frame-ancestors *' })
+  assert.equal(allowInjectedScript(unrestricted), null)
+  assert.equal(unrestricted.get('content-security-policy'), 'frame-ancestors *')
+
+  const both = new Headers({ 'content-security-policy': "script-src 'self'", 'content-security-policy-report-only': "img-src 'self'" })
+  const bothNonce = allowInjectedScript(both)
+  assert.equal(both.get('content-security-policy'), `script-src 'self' 'nonce-${bothNonce}'`)
+  assert.equal(both.get('content-security-policy-report-only'), "img-src 'self'")
+
+  // `script-src-elem` governs `<script src>` wherever it appears, and `script-src` is then not consulted.
+  const elem = new Headers({ 'content-security-policy': "script-src 'self'; script-src-elem 'self'" })
+  const elemNonce = allowInjectedScript(elem)
+  assert.equal(elem.get('content-security-policy'), `script-src 'self'; script-src-elem 'self' 'nonce-${elemNonce}'`)
+
+  // Two policies, sent as two headers or one comma-separated header: both have to allow the script.
+  const two = new Headers()
+  two.append('content-security-policy', "script-src 'self'")
+  two.append('content-security-policy', "default-src 'none'; frame-ancestors *")
+  const twoNonce = allowInjectedScript(two)
+  assert.equal(two.get('content-security-policy'), `script-src 'self' 'nonce-${twoNonce}', default-src 'nonce-${twoNonce}'; frame-ancestors *`)
+})
+
+test('review comment message', () => {
+  assert.equal(
+    reviewMessage({ path: '/pricing?tab=teams', selector: 'main > section:nth-of-type(2) > h2', excerpt: 'Pay as you go', note: 'This heading is wrong' }),
+    'Portal comment on /pricing?tab=teams (main > section:nth-of-type(2) > h2): This heading is wrong\n\nElement text: Pay as you go',
+  )
+  assert.equal(reviewMessage({ path: '/', selector: 'img', excerpt: '', note: 'Missing alt' }), 'Portal comment on / (img): Missing alt')
+})
+
+test('review injection only reads HTML it can decode', () => {
+  assert.equal(isInjectableHtml(new Headers({ 'content-type': 'text/html' })), true)
+  assert.equal(isInjectableHtml(new Headers({ 'content-type': 'text/html; charset=UTF-8' })), true)
+  assert.equal(isInjectableHtml(new Headers({ 'content-type': 'text/html; charset=shift_jis' })), false)
+  assert.equal(isInjectableHtml(new Headers({ 'content-type': 'text/html+weird' })), false)
+  assert.equal(isInjectableHtml(new Headers({ 'content-type': 'application/xhtml+xml' })), false)
+  assert.equal(isInjectableHtml(new Headers()), false)
+
+  const page = '<html><body>ok</body></html>'
+  assert.equal(decodeHtml(Buffer.from(page), null), page)
+  assert.equal(decodeHtml(zlib.gzipSync(page), 'gzip'), page)
+  assert.equal(decodeHtml(zlib.brotliCompressSync(Buffer.from(page)), 'br'), page)
+  assert.equal(decodeHtml(zlib.deflateSync(page), 'deflate'), page)
+  assert.equal(decodeHtml(Buffer.from(page), 'zstd'), null)
+  assert.equal(decodeHtml(Buffer.from(page), 'gzip'), null)
+  // A bomb: kilobytes on the wire, more than the cap once inflated.
+  assert.equal(decodeHtml(zlib.gzipSync(Buffer.alloc(MAX_HTML_BYTES + 1, 0x61)), 'gzip'), null)
+})
+
+test('services from a supervisor without the review flag still parse', () => {
+  const legacy = {
+    name: 'web',
+    command: 'npm run dev',
+    cwd: '/repo',
+    port: 3000,
+    url: null,
+    portal: false,
+    health: null,
+    source: 'yaml',
+    state: 'running',
+    pid: 12,
+    uptimeSeconds: 4,
+    restarts: 0,
+    lastExitCode: null,
+    updatedAt: '2026-09-07T00:00:00.000Z',
+  }
+  assert.equal(servicesReplySchema.parse({ services: [legacy] }).services[0]?.review, true)
 })

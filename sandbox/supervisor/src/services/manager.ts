@@ -52,12 +52,12 @@ const exitFile = (service: string): string => `${SANDBOX.serviceLogsDir}/${servi
 
 const now = (): string => new Date().toISOString()
 
-type Spec = Pick<RegistryEntry, 'command' | 'cwd' | 'port' | 'env' | 'portal' | 'health'>
+type Spec = Pick<RegistryEntry, 'command' | 'cwd' | 'port' | 'env' | 'portal' | 'health' | 'review'>
 
 function specHash(spec: Spec): string {
   const env = Object.fromEntries(Object.entries(spec.env).sort(([a], [b]) => a.localeCompare(b)))
   return createHash('sha256')
-    .update(JSON.stringify({ command: spec.command, cwd: spec.cwd, port: spec.port, env, portal: spec.portal, health: spec.health }))
+    .update(JSON.stringify({ command: spec.command, cwd: spec.cwd, port: spec.port, env, portal: spec.portal, health: spec.health, review: spec.review }))
     .digest('hex')
 }
 
@@ -183,6 +183,7 @@ export class ServiceManager {
       url: this.urlFor(e.port),
       portal: e.portal,
       health: e.health,
+      review: e.review,
       source: e.source,
       state: mapState(info),
       pid: alive && info.pid > 0 ? info.pid : null,
@@ -346,6 +347,7 @@ export class ServiceManager {
         port,
         portal,
         health,
+        review: true,
         source: 'adhoc',
         specHash: null,
         createdAt: prev?.createdAt ?? stamp,
@@ -486,7 +488,7 @@ export class ServiceManager {
       }
       const cwdInfo = await stat(d.cwd).catch(() => null)
       if (!cwdInfo?.isDirectory()) throw new EnsureError(`services.${d.name}.cwd: not a directory: ${d.cwd}`)
-      const spec: Spec = { command: d.command, cwd: d.cwd, port: ports.get(d.name) ?? null, env, portal: d.portal, health: d.health }
+      const spec: Spec = { command: d.command, cwd: d.cwd, port: ports.get(d.name) ?? null, env, portal: d.portal, health: d.health, review: d.review }
       const hash = specHash(spec)
       const prev = this.registry.get(d.name)
       const changed = !prev || prev.source !== 'yaml' || prev.specHash !== hash
