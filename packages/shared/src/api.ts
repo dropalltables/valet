@@ -314,6 +314,8 @@ export type SharePortalResponse = { url: string; expiresAt: string }
  *   ANY  <portal>/*                  proxied to the app inside the sandbox
  *   GET  <portal>/__valet/auth?token= sets the `valet_portal` cookie for this host, then redirects
  *   POST <portal>/__valet/wake       wakes a paused sandbox (owner only), then redirects to /
+ *   GET  <portal>/__valet/review.js  the review widget (owner only)
+ *   POST <portal>/__valet/review     PortalReviewRequest -> 204 (owner only)
  *   GET  /api/portal-auth?return=<portal URL>  (main host) turns a valid `valet_session`
  *        into a short-lived token and redirects to `<portal>/__valet/auth`
  *
@@ -322,6 +324,23 @@ export type SharePortalResponse = { url: string; expiresAt: string }
  */
 export const PORTAL_AUTH_PATH = '/__valet/auth'
 export const PORTAL_WAKE_PATH = '/__valet/wake'
+export const PORTAL_REVIEW_PATH = '/__valet/review'
+export const PORTAL_REVIEW_SCRIPT_PATH = '/__valet/review.js'
+
+/**
+ * A comment made with the review widget core injects into an owner's portal pages.
+ * Core sends it to the thread as a user message (steering the running turn, else
+ * queued behind it).
+ */
+export type PortalReviewRequest = {
+  /** CSS selector for the commented element, from the widget's DOM walk. */
+  selector: string
+  /** Path inside the portal the comment was made on. */
+  path: string
+  /** First 200 characters of the element's text. */
+  excerpt: string
+  note: string
+}
 
 // ---------------------------------------------------------------------------
 // Services

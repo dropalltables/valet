@@ -205,6 +205,8 @@ export type Service = {
   portal: ServicePortal
   /** HTTP path probed for readiness (2xx/3xx passes); null means a TCP connect is enough. */
   health: string | null
+  /** Whether the owner's HTML pages on this port get the review widget; `review: false` turns it off. */
+  review: boolean
   /** `adhoc`: `valet service start` or the UI; `yaml`: `.valet/services.yaml` via `valet services ensure`. */
   source: 'adhoc' | 'yaml'
   state: ServiceState

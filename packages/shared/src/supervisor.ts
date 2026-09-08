@@ -181,6 +181,8 @@ export const serviceSchema = z.object({
   url: z.string().nullable(),
   portal: servicePortalSchema,
   health: z.string().nullable(),
+  /** Defaulted so a sandbox running a supervisor from before the review widget still parses. */
+  review: z.boolean().default(true),
   source: z.enum(['adhoc', 'yaml']),
   state: z.enum(['running', 'starting', 'stopped', 'failed', 'exited']),
   pid: z.number().nullable(),
@@ -250,6 +252,8 @@ export const PORTAL_ERROR_HEADER = 'x-valet-portal-error'
  * `Authorization` (if any) travels in this header and is restored before the app sees it.
  */
 export const PORTAL_APP_AUTHORIZATION_HEADER = 'x-valet-app-authorization'
+/** `off` on an app's response keeps the review widget out of that page; core strips it. */
+export const PORTAL_REVIEW_HEADER = 'x-valet-review'
 /** Portal request env seen by processes in the sandbox. */
 export const PORTAL_ENV = {
   threadId: 'VALET_THREAD_ID',

@@ -239,6 +239,7 @@ async function serviceStatus(args: string[]): Promise<number> {
     ['cwd:', s.cwd],
     ['health:', s.health ?? '-'],
     ['portal:', s.portal === false ? '-' : `${s.portal.title} (${s.portal.path})`],
+    ['review:', s.review ? 'on' : 'off'],
     ['source:', s.source === 'yaml' ? '.valet/services.yaml' : 'ad hoc'],
     ['logs:', `${SANDBOX.serviceLogsDir}/${s.name}.log`],
   ]
