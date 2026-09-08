@@ -25,7 +25,17 @@ import { errorMessage, logger } from '../logger.js'
 import type { ThreadService } from '../threads/service.js'
 import { OWNER_TOKEN_TTL_MS, PORTAL_COOKIE, type PortalAuth, type PortalGrant } from './auth.js'
 import { deniedPage, errorPage, notFoundPage, pausedPage, unavailablePage } from './pages.js'
-import { MAX_HTML_BYTES, REVIEW_WIDGET_JS, allowInjectedScript, decodeHtml, injectWidget, isInjectableHtml, reviewMessage } from './review.js'
+import {
+  MAX_HTML_BYTES,
+  REVIEW_WIDGET_JS,
+  allowInjectedScript,
+  decodeHtml,
+  injectWidget,
+  injectionPoint,
+  isInjectableHtml,
+  reviewMessage,
+  widgetTag,
+} from './review.js'
 import type { PortalUrls } from './urls.js'
 
 const log = logger('portals')
@@ -42,6 +52,8 @@ const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-aut
 /** Statuses whose response carries no body; `new Response` throws when given one. */
 const BODYLESS_STATUS = new Set([101, 204, 205, 304])
 const reviewSchema = z.object({ selector: z.string().max(2000), path: z.string().max(2000), excerpt: z.string().max(200), note: z.string().trim().min(1).max(4000) })
+/** Bytes held while looking for the injection point before a document is passed through. */
+const SCAN_BYTES = 64 * 1024
 /** Connection-level failures: nothing answered at the supervisor's address. */
 const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT'])
 
@@ -215,18 +227,62 @@ async function* resume(head: Buffer[], rest: IncomingMessage): AsyncGenerator<Bu
 }
 
 /**
- * The response body with the review widget's script tag in it. Injection has to buffer
- * (the tag moves `</body>` and Content-Length), so it runs only for an owner's HTML
- * documents; every other response keeps the streaming path. A body that cannot be
- * decoded is passed through exactly as it arrived, and one that outgrows the cap goes
- * back to streaming rather than filling core's heap with an app's endless page.
+ * The response with the widget's script tag inserted after its `<head>` open tag, as
+ * the bytes arrive: a page that streams its shell first still reaches the browser
+ * first. Only the first `SCAN_BYTES` are held, and a document that has neither a
+ * `<head>` nor a `<body>` by then is passed through untouched.
+ */
+async function* withWidget(res: IncomingMessage, tag: Buffer): AsyncGenerator<Buffer> {
+  let pending: Buffer | null = null
+  let placed = false
+  for await (const chunk of res as AsyncIterable<Buffer>) {
+    if (placed) {
+      yield chunk
+      continue
+    }
+    const prefix: Buffer = pending ? Buffer.concat([pending, chunk]) : chunk
+    const at = injectionPoint(prefix)
+    if (at === null && prefix.byteLength < SCAN_BYTES) {
+      pending = prefix
+      continue
+    }
+    placed = true
+    pending = null
+    if (at === null) yield prefix
+    else {
+      yield prefix.subarray(0, at)
+      yield tag
+      yield prefix.subarray(at)
+    }
+  }
+  // The whole document was shorter than one open tag's worth of scanning.
+  if (pending) {
+    yield pending
+    yield tag
+  }
+}
+
+/**
+ * The response body with the review widget's script tag in it, for an owner's HTML
+ * documents only; every other response goes straight through. `Content-Length` is
+ * dropped rather than recomputed, so the tag can be inserted without holding the body.
+ * An app that compressed anyway, despite the `accept-encoding: identity` this request
+ * asked for, has to be decoded whole: that body is passed through exactly as it
+ * arrived when it cannot be decoded, and goes back to streaming when it outgrows the
+ * cap rather than filling core's heap with an app's endless page.
  */
 async function injectReview(res: IncomingMessage, headers: Headers): Promise<Buffer | ReadableStream> {
+  const encoding = headers.get('content-encoding')?.trim().toLowerCase() ?? 'identity'
+  if (encoding === 'identity' || encoding === '') {
+    const tag = Buffer.from(widgetTag(allowInjectedScript(headers)), 'utf8')
+    headers.delete('content-length')
+    return Readable.toWeb(Readable.from(withWidget(res, tag))) as ReadableStream
+  }
   const declared = Number(headers.get('content-length'))
   if (Number.isInteger(declared) && declared > MAX_HTML_BYTES) return Readable.toWeb(res) as ReadableStream
   const read = await readCapped(res, MAX_HTML_BYTES)
   if (read.kind === 'partial') return Readable.toWeb(Readable.from(resume(read.head, res))) as ReadableStream
-  const html = decodeHtml(read.body, headers.get('content-encoding'))
+  const html = decodeHtml(read.body, encoding)
   if (html === null) return read.body
   const out = Buffer.from(injectWidget(html, allowInjectedScript(headers)), 'utf8')
   headers.delete('content-encoding')

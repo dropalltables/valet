@@ -3,7 +3,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import useSWR from 'swr'
 import { useTheme } from 'next-themes'
-import { LIVE_STATUSES, type FileEntry, type ThreadListItem } from '@valet/shared'
+import { LIVE_STATUSES, formatBytes, type FileEntry, type ThreadListItem } from '@valet/shared'
 import { FileIcon, FolderIcon, XIcon } from 'lucide-react'
 import { api } from '@/lib/api'
 import { highlight } from '@/lib/highlight'
@@ -105,7 +105,7 @@ function DirectoryList({
             )}
             <span className="min-w-0 flex-1 truncate font-mono">{e.name}</span>
             {e.size !== null && e.kind === 'file' && (
-              <span className="shrink-0 text-muted-foreground tabular-nums">{bytes(e.size)}</span>
+              <span className="shrink-0 text-muted-foreground tabular-nums">{formatBytes(e.size)}</span>
             )}
           </button>
         </li>
@@ -144,7 +144,7 @@ function FileViewer({ threadId, path }: { threadId: string; path: string }) {
     )
   }
   if (!data) return null
-  if (data.binary) return <p className="p-4 text-sm text-muted-foreground">Binary file, {bytes(data.size)}</p>
+  if (data.binary) return <p className="p-4 text-sm text-muted-foreground">Binary file, {formatBytes(data.size)}</p>
 
   return (
     <div className="flex flex-col">
@@ -162,13 +162,7 @@ function FileViewer({ threadId, path }: { threadId: string; path: string }) {
           </code>
         </pre>
       )}
-      {data.truncated && <p className="border-t px-3 py-2 text-xs text-muted-foreground">Truncated, {bytes(data.size)} total</p>}
+      {data.truncated && <p className="border-t px-3 py-2 text-xs text-muted-foreground">Truncated, {formatBytes(data.size)} total</p>}
     </div>
   )
-}
-
-function bytes(n: number): string {
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }

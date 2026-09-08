@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { sql } from 'drizzle-orm'
 import { z } from 'zod'
 import {
@@ -53,6 +54,9 @@ import type { UsageService } from '../usage/service.js'
 import { jsonBody, queryParams } from './validate.js'
 
 const log = logger('http')
+
+/** GitHub's own ceiling on a webhook delivery; nothing larger can be a real one. */
+const GITHUB_WEBHOOK_MAX_BYTES = 25 * 1024 * 1024
 
 export type AppDeps = {
   version: string
@@ -162,7 +166,7 @@ function parseKind(raw: string): CredentialKind {
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono()
 
-  /** The thread an unlisted link names, or 404. Every failure counts against the attempt budget. */
+  /** The thread an unlisted link names, or 404. */
   const shared = async (token: string): Promise<string> => {
     const id = await deps.shares.resolve(token)
     if (!id) throw notFound('thread')
@@ -180,8 +184,10 @@ export function createApp(deps: AppDeps): Hono {
   // Portal traffic authenticates with its own cookie, so it is mounted ahead of the session check.
   app.route('/', deps.portals.routes())
 
-  // GitHub authenticates itself by signing the body, so this one is mounted ahead of it too.
-  app.post(GITHUB_WEBHOOK_PATH, async (c) => {
+  // GitHub authenticates itself by signing the body, so this one is mounted ahead of it
+  // too. Nobody is authenticated when the body is read, so its size is capped first:
+  // GitHub itself never delivers more than 25 MB.
+  app.post(GITHUB_WEBHOOK_PATH, bodyLimit({ maxSize: GITHUB_WEBHOOK_MAX_BYTES }), async (c) => {
     const githubApp = await deps.credentials.githubApp()
     if (!githubApp) throw new HttpError(503, 'No GitHub App is configured')
     const raw = await c.req.text()
@@ -362,10 +368,10 @@ export function createApp(deps: AppDeps): Hono {
         const { appId } = body
         const privateKey = body.privateKey?.trim()
         const webhookSecret = body.webhookSecret?.trim()
-        if (appId === undefined) throw badRequest('appId is required')
-        if (!privateKey) throw badRequest('privateKey is required')
-        if (!webhookSecret) throw badRequest('webhookSecret is required')
-        if (!privateKey.includes('PRIVATE KEY')) throw badRequest('privateKey must be the PEM file GitHub generated')
+        if (appId === undefined) throw badRequest('App ID is required')
+        if (!privateKey) throw badRequest('Private key is required')
+        if (!webhookSecret) throw badRequest('Webhook secret is required')
+        if (!privateKey.includes('PRIVATE KEY')) throw badRequest('Private key must be the PEM file GitHub generated')
         // A key that cannot sign fails locally, without an HTTP status of its own.
         const installations = await new GitHubApp({ appId, privateKey }).installations().catch((err: unknown) => {
           if (err instanceof HttpError || statusOf(err)) throw err

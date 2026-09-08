@@ -84,14 +84,24 @@ export class SecretRedactor {
   constructor(private readonly load: (threadId: string) => Promise<ThreadSecrets | null>) {}
 
   async apply(threadId: string, event: ThreadEvent): Promise<ThreadEvent> {
+    const secrets = await this.secretsFor(threadId)
+    return secrets ? redactEvent(event, secrets.values) : event
+  }
+
+  /** The same values over a plain string, for text that does not go through the event log. */
+  async applyToString(threadId: string, value: string): Promise<string> {
+    const secrets = await this.secretsFor(threadId)
+    return secrets ? redactString(value, secrets.values) : value
+  }
+
+  private async secretsFor(threadId: string): Promise<ThreadSecrets | null> {
     const cached = this.cache.get(threadId)
-    if (cached) return redactEvent(event, cached.values)
+    if (cached) return cached
     // A thread with no row has nothing to redact against, and caching that answer
     // would keep it after the row appears.
     const secrets = await this.load(threadId)
-    if (!secrets) return event
-    this.cache.set(threadId, secrets)
-    return redactEvent(event, secrets.values)
+    if (secrets) this.cache.set(threadId, secrets)
+    return secrets
   }
 
   invalidate(projectId: string): void {

@@ -1,10 +1,7 @@
 import { SHARE_PATH, type ChangesResponse, type ThreadShareResponse } from '@valet/shared'
 import type { Config } from '../config.js'
 import type { Cipher } from '../crypto.js'
-import { logger } from '../logger.js'
 import type { ThreadService } from './service.js'
-
-const log = logger('share')
 
 /**
  * The whole credential behind an unlisted link: AES-GCM over this JSON, so it is
@@ -15,20 +12,11 @@ const log = logger('share')
 type ShareToken = { v: 1; k: typeof SHARE_KIND; t: string; g: number }
 const SHARE_KIND = 'thread-share'
 
-/** Failed token attempts allowed in a window, across all callers, before every attempt is refused. */
-const MAX_FAILURES = 100
-const WINDOW_MS = 60_000
-
 /** How long one computed diff serves every link holder, matching the panel's poll interval. */
 const CHANGES_TTL_MS = 5_000
 
 /** Mints, verifies, and revokes unlisted thread links, and serves what they expose. */
 export class ThreadShares {
-  /**
-   * Core is only reachable through the web app, which does not pass the client
-   * address on in a form core can trust, so attempts are counted in one bucket.
-   */
-  private failures = { count: 0, resetAt: 0 }
   /** Live shared streams per thread, so `revoke()` can hang up on the viewers it just cut off. */
   private readonly viewers = new Map<string, Set<() => void>>()
   private readonly recentChanges = new Map<string, { at: number; result: Promise<ChangesResponse> }>()
@@ -87,18 +75,15 @@ export class ThreadShares {
   }
 
   /**
-   * The thread a link token names, or null when it is malformed, forged, revoked,
-   * or attempts have been exhausted in the last minute.
+   * The thread a link token names, or null when it is malformed, forged, or revoked.
+   * The token is AES-GCM authenticated, so guessing one is infeasible and there is
+   * nothing here for a rate limit to defend.
    */
   async resolve(raw: string): Promise<string | null> {
-    if (this.exhausted()) return null
     const token = this.read(raw)
-    if (token) {
-      const state = await this.threads.shareState(token.t).catch(() => null)
-      if (state?.shared === true && state.generation === token.g) return token.t
-    }
-    this.recordFailure()
-    return null
+    if (!token) return null
+    const state = await this.threads.shareState(token.t).catch(() => null)
+    return state?.shared === true && state.generation === token.g ? token.t : null
   }
 
   private url(id: string, generation: number): string {
@@ -116,19 +101,5 @@ export class ThreadShares {
     if (token.v !== 1 || token.k !== SHARE_KIND) return null
     if (typeof token.t !== 'string' || typeof token.g !== 'number') return null
     return token
-  }
-
-  private exhausted(): boolean {
-    return this.failures.resetAt > Date.now() && this.failures.count >= MAX_FAILURES
-  }
-
-  private recordFailure(): void {
-    const now = Date.now()
-    if (this.failures.resetAt <= now) {
-      this.failures = { count: 1, resetAt: now + WINDOW_MS }
-      return
-    }
-    this.failures.count += 1
-    if (this.failures.count === MAX_FAILURES) log.warn('share link attempts exhausted', { until: new Date(this.failures.resetAt).toISOString() })
   }
 }

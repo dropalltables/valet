@@ -49,7 +49,7 @@ export const putWebhooksSchema = z.object({
       z.object({
         id: z.string().optional(),
         kind: z.enum(['slack', 'discord', 'ntfy', 'generic']),
-        url: z.string().url(),
+        url: z.string().url().optional(),
         secret: z.string().optional(),
         events: z.array(z.enum(['waiting', 'finished', 'error'])).min(1),
       }),
@@ -133,7 +133,7 @@ export class NotificationService {
       this.db.select({ endpoint: pushSubscriptions.endpoint }).from(pushSubscriptions),
       this.listWebhooks(),
     ])
-    return { vapidPublicKey, browsers: subs.length, webhooks: hooks.map(toWebhook) }
+    return { vapidPublicKey, browsers: subs.length, webhooks: hooks.map((row) => this.toWebhook(row)) }
   }
 
   async subscribe(sub: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<void> {
@@ -157,15 +157,18 @@ export class NotificationService {
     const byId = new Map(existing.map((r) => [r.id, r]))
     const seen = new Set<string>()
     const rows = input.map((w, position) => {
-      assertPostableUrl(w.url)
       const previous = w.id ? byId.get(w.id) : undefined
       if (w.id && !previous) throw notFound('webhook')
       if (previous && seen.has(previous.id)) throw badRequest(`duplicate webhook: ${previous.id}`)
       if (previous) seen.add(previous.id)
+      // Only the masked URL was ever shown, so an unchanged one comes back omitted.
+      const url = w.url ?? (previous ? this.cipher.decrypt(previous.urlEnc) : null)
+      if (url === null) throw badRequest('url is required')
+      assertPostableUrl(url)
       // A secret only signs the `generic` envelope; the other three authenticate by URL.
       const secretEnc = w.kind !== 'generic' ? null : w.secret ? this.cipher.encrypt(w.secret) : (previous?.secretEnc ?? null)
       // The list is rewritten wholesale, so the submitted order is the stored order.
-      return { id: previous?.id ?? newId(), kind: w.kind, url: w.url, secretEnc, events: w.events, position }
+      return { id: previous?.id ?? newId(), kind: w.kind, urlEnc: this.cipher.encrypt(url), secretEnc, events: w.events, position }
     })
     await this.db.transaction(async (tx) => {
       await tx.delete(webhooks)
@@ -214,10 +217,13 @@ export class NotificationService {
 
   private async postWebhook(row: WebhookRow, n: Notification): Promise<void> {
     const req = buildWebhookRequest(row.kind, row.secretEnc ? this.cipher.decrypt(row.secretEnc) : null, n)
-    const res = await fetch(row.url, {
+    const res = await fetch(this.cipher.decrypt(row.urlEnc), {
       method: 'POST',
       headers: req.headers,
       body: req.body,
+      // The URL was checked when it was stored; a redirect would send the request
+      // somewhere that was never checked, so a 3xx counts as a failure.
+      redirect: 'manual',
       signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     })
     // Only the status: the response body would reflect whatever core can reach back into the UI.
@@ -235,6 +241,10 @@ export class NotificationService {
     return error === null ? { ok: true, error: null } : { ok: false, error }
   }
 
+  private toWebhook(row: WebhookRow): Webhook {
+    return { id: row.id, kind: row.kind, url: maskUrl(this.cipher.decrypt(row.urlEnc)), hasSecret: row.secretEnc !== null, events: row.events }
+  }
+
   async testWebhook(id: string): Promise<NotificationTestResponse> {
     const [row] = await this.db.select().from(webhooks).where(eq(webhooks.id, id))
     if (!row) throw notFound('webhook')
@@ -247,8 +257,10 @@ export class NotificationService {
   }
 }
 
-function toWebhook(row: WebhookRow): Webhook {
-  return { id: row.id, kind: row.kind, url: row.url, hasSecret: row.secretEnc !== null, events: row.events }
+/** Enough of a URL to tell two webhooks apart in the list, and no more. */
+function maskUrl(raw: string): string {
+  const { host } = new URL(raw)
+  return `${host}/…${raw.slice(-4)}`
 }
 
 function base64UrlBytes(value: string): number {

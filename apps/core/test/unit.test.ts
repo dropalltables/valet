@@ -14,7 +14,7 @@ import { diedOfMemory, isLocallyBuilt, reposVolumeName, soleNetworkName, toUsage
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
 import { servicesReplySchema } from '@valet/shared'
 import { parseGitHubUrl } from '../src/git/github.js'
-import { MAX_HTML_BYTES, allowInjectedScript, decodeHtml, injectWidget, isInjectableHtml, reviewMessage } from '../src/portals/review.js'
+import { MAX_HTML_BYTES, allowInjectedScript, decodeHtml, injectWidget, injectionPoint, isInjectableHtml, reviewMessage } from '../src/portals/review.js'
 import { titleFromPrompt } from '../src/threads/mapper.js'
 import type { GitRunner } from '../src/git/changes.js'
 import { readSnapshotKey, snapshotKey, snapshotKeyPaths, type SnapshotEntry } from '../src/threads/sandbox-ops.js'
@@ -252,15 +252,21 @@ test('snapshot key of a ref reads blob ids for the setup script and lockfiles', 
 })
 
 test('review widget script tag placement', () => {
-  assert.equal(injectWidget('<html><body>hi</BODY></html>', null), '<html><body>hi<script src="/__valet/review.js" defer></script></BODY></html>')
+  const tag = '<script src="/__valet/review.js" defer></script>'
+  // The head comes first, so the tag can go out before the rest of the page exists.
+  assert.equal(injectWidget('<html><HEAD><title>t</title></HEAD><body>hi</body></html>', null), `<html><HEAD>${tag}<title>t</title></HEAD><body>hi</body></html>`)
+  assert.equal(injectWidget('<html><body class="x">hi</body></html>', null), `<html><body class="x">${tag}hi</body></html>`)
   assert.equal(injectWidget('<p>fragment</p>', 'n1'), '<p>fragment</p><script src="/__valet/review.js" defer nonce="n1"></script>')
-  // The last close wins, so a `</body>` inside markup does not take the tag with it.
-  assert.equal(
-    injectWidget('<body><iframe srcdoc="&lt;/body&gt;"></iframe></body>', null),
-    '<body><iframe srcdoc="&lt;/body&gt;"></iframe><script src="/__valet/review.js" defer></script></body>',
-  )
   // `'\u0130'.toLowerCase()` is two characters, so a lowercased copy would splice at the wrong offset.
-  assert.equal(injectWidget('<p>\u0130stanbul</p></body>', null), '<p>\u0130stanbul</p><script src="/__valet/review.js" defer></script></body>')
+  assert.equal(injectWidget('<body>\u0130stanbul</body>', null), `<body>${tag}\u0130stanbul</body>`)
+})
+
+test('the streaming injection point is a byte offset into what has arrived', () => {
+  assert.equal(injectionPoint(Buffer.from('<!doctype html><html><he')), null)
+  assert.equal(injectionPoint(Buffer.from('<!doctype html><html><head>')), '<!doctype html><html><head>'.length)
+  // Multi-byte characters before the tag: the offset counts bytes, not characters.
+  const utf8 = Buffer.from('<title>\u0130stanbul</title><body>rest', 'utf8')
+  assert.equal(injectionPoint(utf8), utf8.indexOf('<body>') + '<body>'.length)
 })
 
 test('review widget nonce goes into the directive that governs scripts', () => {

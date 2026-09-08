@@ -1,6 +1,7 @@
 import { and, asc, eq, isNotNull, lt, sql } from 'drizzle-orm'
 import type { SnapshotsResponse } from '@valet/shared'
 import type { Config } from '../config.js'
+import { randomHex } from '../crypto.js'
 import type { Db } from '../db/index.js'
 import { projects, type ProjectRow, type ThreadRow } from '../db/schema.js'
 import { LABEL_KEY, LABEL_PROJECT, LABEL_SNAPSHOT, LABEL_THREAD, snapshotVolumeName, type DockerClient } from '../docker/client.js'
@@ -14,6 +15,8 @@ const log = logger('snapshots')
 const SWEEP_INTERVAL_MS = 60 * 60_000
 /** A snapshot no thread has started from in a week is worth less than the disk it holds. */
 export const UNUSED_TTL_MS = 7 * 24 * 60 * 60_000
+/** A capture is between its copy and its row update for at most this long. */
+const ORPHAN_GRACE_MS = 15 * 60_000
 
 /**
  * One warm-start volume per project, cloned from a thread's home volume once
@@ -109,23 +112,30 @@ export class SnapshotStore {
   }
 
   /**
-   * Replaces the project's snapshot with a clone of `sourceVolume`. The old volume is
-   * only removed once the new one is complete and recorded, so a failure leaves the
-   * previous snapshot in place. Never throws: a thread is usable without a snapshot.
+   * Replaces the project's snapshot with a clone of `sourceVolume`. The clone goes to a
+   * name of its own and the previous volume is only removed once the new one is complete
+   * and recorded, so nothing ever overwrites the volume the project currently points at
+   * and a failure leaves the previous snapshot in place. Never throws: a thread is
+   * usable without a snapshot.
    */
-  async capture(project: ProjectRow, key: string, baseBranch: string, sourceVolume: string, signal?: AbortSignal): Promise<void> {
+  async capture(projectId: string, key: string, baseBranch: string, sourceVolume: string, signal?: AbortSignal): Promise<void> {
     if (!this.enabled) return
-    if (project.snapshotKey === key && project.snapshotVolume && (await this.docker.volumeExists(project.snapshotVolume))) return
-    const target = snapshotVolumeName(project.id, shortSnapshotKey(key))
+    // Read here rather than taken from the caller: its row predates the setup this
+    // captures, and another thread on the same project may have recorded one since.
+    const [current] = await this.db.select().from(projects).where(eq(projects.id, projectId))
+    if (!current) return
+    if (current.snapshotKey === key && current.snapshotVolume && (await this.docker.volumeExists(current.snapshotVolume))) return
+    const previous = current.snapshotVolume
+    const target = snapshotVolumeName(projectId, `${shortSnapshotKey(key)}-${randomHex(4)}`)
     try {
       const sizeBytes = await this.docker.cloneVolume(
         sourceVolume,
         target,
-        { [LABEL_SNAPSHOT]: 'true', [LABEL_PROJECT]: project.id, [LABEL_KEY]: key },
+        { [LABEL_SNAPSHOT]: 'true', [LABEL_PROJECT]: projectId, [LABEL_KEY]: key },
         signal,
       )
       const now = new Date()
-      await this.patch(project.id, {
+      await this.patch(projectId, {
         snapshotKey: key,
         snapshotBaseBranch: baseBranch,
         snapshotVolume: target,
@@ -133,11 +143,15 @@ export class SnapshotStore {
         snapshotCreatedAt: now,
         snapshotLastUsedAt: now,
       })
-      log.info('captured snapshot', { projectId: project.id, key: shortSnapshotKey(key), bytes: sizeBytes })
-      if (project.snapshotVolume && project.snapshotVolume !== target) await this.docker.removeVolume(project.snapshotVolume)
+      log.info('captured snapshot', { projectId, key: shortSnapshotKey(key), bytes: sizeBytes })
     } catch (err) {
-      log.warn('capturing snapshot failed', { projectId: project.id, err })
+      log.warn('capturing snapshot failed', { projectId, err })
       return
+    }
+    // Outside the try: a volume Docker will not remove yet (a restore has it mounted)
+    // must not report a capture that succeeded as failed. The sweep collects it later.
+    if (previous && previous !== target) {
+      await this.docker.removeVolume(previous).catch((err: unknown) => log.warn('removing the previous snapshot failed', { projectId, volume: previous, err }))
     }
     await this.prune().catch((err: unknown) => log.warn('prune after capture failed', { err }))
   }
@@ -194,17 +208,22 @@ export class SnapshotStore {
   /**
    * Snapshot volumes of a known project that it no longer points at, left behind by a
    * crash between the clone and the row update. Volumes labelled with an unknown project
-   * belong to another Valet on the same Docker host and are left alone.
+   * belong to another Valet on the same Docker host and are left alone, and so is a
+   * volume young enough to be a capture that has copied but not yet recorded itself,
+   * including one whose age Docker does not report.
    */
   private async removeOrphans(): Promise<void> {
     const volumes = await this.docker.listSnapshotVolumes()
     if (volumes.length === 0) return
     const rows = await this.db.select({ id: projects.id, volume: projects.snapshotVolume }).from(projects)
     const current = new Map(rows.map((r) => [r.id, r.volume]))
+    const oldEnough = Date.now() - ORPHAN_GRACE_MS
     for (const volume of volumes) {
       const projectId = volume.Labels?.[LABEL_PROJECT]
       if (projectId === undefined || !current.has(projectId)) continue
       if (current.get(projectId) === volume.Name) continue
+      const createdAt = Date.parse(volume.CreatedAt ?? '')
+      if (!Number.isFinite(createdAt) || createdAt > oldEnough) continue
       log.info('removing orphaned snapshot volume', { projectId, volume: volume.Name })
       await this.docker.removeVolume(volume.Name).catch((err: unknown) => log.warn('orphan removal failed', { volume: volume.Name, err }))
     }

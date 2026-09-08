@@ -12,7 +12,6 @@ import {
   type CreateServiceRequest,
   type EnsureReply,
   type Service,
-  type ServicePortal,
   type ServiceReadiness,
   type ServiceState,
 } from '@valet/shared'
@@ -37,7 +36,7 @@ import {
   updateUnits,
   type ProcessInfo,
 } from './supervisord.js'
-import { parseServicesYaml, resolveEnv, wantsPort, type Declared } from './yaml.js'
+import { normalizePortal, parseServicesYaml, resolveEnv, wantsPort, type Declared } from './yaml.js'
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** How often process starts are sampled for the restart count between requests. */
@@ -333,11 +332,11 @@ export class ServiceManager {
     const env = req.env ?? {}
     this.validateEnv(env, 'env')
     const cwd = await this.resolveCwd(req.cwd)
-    const portal: ServicePortal = !req.portal ? false : req.portal === true ? { path: '/', title: req.name } : { path: req.portal.path ?? '/', title: req.portal.title ?? req.name }
+    const portal = normalizePortal(req.name, req.portal)
     const health = req.health ?? null
     const entry = await this.locked(async () => {
       const prev = this.registry.get(req.name)
-      const port = await this.assignPort(req.name, req.port ?? null, req.portal !== undefined || health !== null, new Set(this.registry.portOwners().keys()))
+      const port = await this.assignPort(req.name, req.port ?? null, portal !== false || health !== null, new Set(this.registry.portOwners().keys()))
       const stamp = now()
       const e: RegistryEntry = {
         name: req.name,

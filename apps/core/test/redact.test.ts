@@ -88,6 +88,20 @@ test('caches per thread and reloads after the project changes', async () => {
   assert.equal(loads, 3)
 })
 
+test('the thread row\'s error is redacted against the same cached values', async () => {
+  let loads = 0
+  const redactor = new SecretRedactor(async (threadId) => {
+    loads += 1
+    return threadId === 'gone' ? null : { projectId: 'p1', values: [SECRET] }
+  })
+
+  assert.equal(await redactor.applyToString('t1', `git failed: ${SECRET}`), `git failed: ${REDACTION_MARKER}`)
+  await redactor.apply('t1', { type: 'log', level: 'info', message: 'x', at: 'now' })
+  assert.equal(loads, 1)
+  // A thread with no row has nothing to redact against, and the string is untouched.
+  assert.equal(await redactor.applyToString('gone', SECRET), SECRET)
+})
+
 test('a project with redaction disabled keeps its output', async () => {
   const redactor = new SecretRedactor(async () => ({ projectId: 'p1', values: [] }))
   const event: ThreadEvent = { type: 'log', level: 'info', message: `token ${SECRET}`, at: 'now' }

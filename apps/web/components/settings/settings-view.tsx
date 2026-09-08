@@ -8,6 +8,7 @@ import {
   NOTIFICATION_EVENTS,
   NOTIFICATION_EVENT_LABELS,
   WEBHOOK_LABELS,
+  formatBytes,
   type AgentKind,
   type CredentialKind,
   type CredentialStatus,
@@ -21,7 +22,7 @@ import {
 } from '@valet/shared'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import { bytes, relativeTime } from '@/lib/format'
+import { relativeTime } from '@/lib/format'
 import { useAgents, useCredentials, useGitHubApp, useNotifications, useSettings, useSnapshots } from '@/lib/hooks'
 import { disablePush, enablePush, pushStatus, type PushState, type PushStatus } from '@/lib/push'
 import {
@@ -138,6 +139,7 @@ function CredentialRow({
 }) {
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const field = fields[0]!
   const configured = status?.configured ?? false
 
@@ -145,13 +147,14 @@ function CredentialRow({
     e.preventDefault()
     if (!value.trim()) return
     setBusy(true)
+    setError(null)
     try {
       await api.credentials.put(kind, { [field.key]: value.trim() })
       setValue('')
       onChange()
       toast.success(`${title} saved`)
     } catch (err) {
-      toast.error(errorMessage(err))
+      setError(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -197,7 +200,10 @@ function CredentialRow({
               type="password"
               autoComplete="off"
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e) => {
+                setValue(e.target.value)
+                setError(null)
+              }}
               placeholder={field.placeholder}
               className="font-mono"
             />
@@ -207,6 +213,11 @@ function CredentialRow({
           </Button>
         </form>
       </div>
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
@@ -221,6 +232,7 @@ function GitHubAppRow({ status, onChange }: { status: CredentialStatus | undefin
   const [privateKey, setPrivateKey] = useState('')
   const [webhookSecret, setWebhookSecret] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const configured = status?.configured ?? false
   const complete = appId.trim() !== '' && privateKey.trim() !== '' && webhookSecret.trim() !== ''
 
@@ -228,6 +240,7 @@ function GitHubAppRow({ status, onChange }: { status: CredentialStatus | undefin
     e.preventDefault()
     if (!complete) return
     setBusy(true)
+    setError(null)
     try {
       await api.credentials.put('github-app', {
         appId: Number(appId),
@@ -241,7 +254,7 @@ function GitHubAppRow({ status, onChange }: { status: CredentialStatus | undefin
       await mutate()
       toast.success('GitHub App saved')
     } catch (err) {
-      toast.error(errorMessage(err))
+      setError(errorMessage(err))
     } finally {
       setBusy(false)
     }
@@ -335,6 +348,11 @@ function GitHubAppRow({ status, onChange }: { status: CredentialStatus | undefin
             className="font-mono text-xs"
           />
         </div>
+        {error && (
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+        )}
         <div>
           <Button type="submit" size="default" disabled={busy || !complete}>
             Save
@@ -514,7 +532,7 @@ function Snapshots() {
         <dt className="text-muted-foreground">Projects</dt>
         <dd className="tabular-nums">{data.count}</dd>
         <dt className="text-muted-foreground">Storage</dt>
-        <dd className="tabular-nums">{`${bytes(data.totalBytes)} of ${bytes(data.budgetBytes)}`}</dd>
+        <dd className="tabular-nums">{`${formatBytes(data.totalBytes)} of ${formatBytes(data.budgetBytes)}`}</dd>
       </dl>
     </Section>
   )
@@ -736,8 +754,8 @@ function Webhooks({ webhooks, onSave }: { webhooks: Webhook[]; onSave: (next: Pu
   const [pendingDelete, setPendingDelete] = useState<Webhook | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Core replaces the whole list, and keeps a stored secret when `secret` is omitted.
-  const keep = (w: Webhook): PutWebhook => ({ id: w.id, kind: w.kind, url: w.url, events: w.events })
+  // Core replaces the whole list, and keeps the stored URL and secret when they are omitted.
+  const keep = (w: Webhook): PutWebhook => ({ id: w.id, kind: w.kind, events: w.events })
 
   async function put(next: PutWebhook[]): Promise<void> {
     setBusy(true)
@@ -758,7 +776,7 @@ function Webhooks({ webhooks, onSave }: { webhooks: Webhook[]; onSave: (next: Pu
     const entry: PutWebhook = {
       ...(draft.id ? { id: draft.id } : {}),
       kind: draft.kind,
-      url: draft.url.trim(),
+      ...(draft.url.trim() ? { url: draft.url.trim() } : {}),
       events: draft.events,
       ...(draft.kind === 'generic' && draft.secret ? { secret: draft.secret } : {}),
     }
@@ -818,7 +836,7 @@ function Webhooks({ webhooks, onSave }: { webhooks: Webhook[]; onSave: (next: Pu
                   <Button
                     size="xs"
                     variant="ghost"
-                    onClick={() => setDraft({ id: w.id, kind: w.kind, url: w.url, secret: '', events: w.events, hasSecret: w.hasSecret })}
+                    onClick={() => setDraft({ id: w.id, kind: w.kind, url: '', secret: '', events: w.events, hasSecret: w.hasSecret })}
                   >
                     Edit
                   </Button>
@@ -859,10 +877,10 @@ function Webhooks({ webhooks, onSave }: { webhooks: Webhook[]; onSave: (next: Pu
                 <Input
                   id="webhook-url"
                   type="url"
-                  required
+                  required={draft.id === null}
                   value={draft.url}
                   onChange={(e) => setDraft({ ...draft, url: e.target.value })}
-                  placeholder={WEBHOOK_URL_PLACEHOLDER[draft.kind]}
+                  placeholder={draft.id ? 'Unchanged' : WEBHOOK_URL_PLACEHOLDER[draft.kind]}
                   className="font-mono"
                   autoFocus
                 />

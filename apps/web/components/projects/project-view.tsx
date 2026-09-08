@@ -4,10 +4,10 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, type FormEvent } from 'react'
 import useSWR, { useSWRConfig } from 'swr'
-import type { Project, ProjectEnvVar } from '@valet/shared'
+import { formatBytes, type Project, type ProjectEnvVar } from '@valet/shared'
 import { toast } from 'sonner'
 import { api, ApiError, errorMessage } from '@/lib/api'
-import { bytes, relativeTime, repoSlug } from '@/lib/format'
+import { relativeTime, repoSlug } from '@/lib/format'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,6 +52,7 @@ export function ProjectView({ id }: { id: string }) {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-6 py-8">
+        <h1 className="truncate text-lg font-medium">{project.name}</h1>
         <Details project={project} />
         <Snapshot project={project} />
         {project.source === 'github' && <PullRequestSettings project={project} />}
@@ -200,7 +201,7 @@ function Snapshot({ project }: { project: Project }) {
         <dt className="text-muted-foreground">Base branch</dt>
         <dd className="font-mono text-xs">{snapshot.baseBranch}</dd>
         <dt className="text-muted-foreground">Size</dt>
-        <dd className="tabular-nums">{bytes(snapshot.sizeBytes)}</dd>
+        <dd className="tabular-nums">{formatBytes(snapshot.sizeBytes)}</dd>
         <dt className="text-muted-foreground">Created</dt>
         <dd>{relativeTime(snapshot.createdAt)}</dd>
         <dt className="text-muted-foreground">Last used</dt>

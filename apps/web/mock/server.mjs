@@ -8,6 +8,8 @@ import { WebSocketServer } from 'ws'
 
 const PORT = Number(process.env.PORT ?? 8081)
 const PASSWORD = process.env.MOCK_PASSWORD ?? ''
+/** Where the Next.js dev server serving this mock's data is reachable, for links this API hands back (share links, the GitHub webhook URL). */
+const SITE_ORIGIN = process.env.MOCK_SITE_ORIGIN ?? 'http://localhost:3100'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const now = () => new Date().toISOString()
@@ -113,7 +115,7 @@ function thread(overrides) {
 const threads = new Map()
 
 function addThread(row, events = []) {
-  threads.set(row.id, { row, events: [], subscribers: new Set(), services: [], portals: [] })
+  threads.set(row.id, { row, events: [], subscribers: new Set(), sharedSubscribers: new Set(), services: [], portals: [] })
   for (const e of events) appendEvent(row.id, e, { silent: true })
   return row
 }
@@ -152,7 +154,10 @@ const credentials = {
   claude: { kind: 'claude', configured: true, label: 'sk-ant-oat…3f9a', method: 'oauth', updatedAt: ago(60 * 24 * 3) },
   codex: { kind: 'codex', configured: false, label: null, method: null, updatedAt: null },
   github: { kind: 'github', configured: true, label: 'ghp_…a1b2 (natey)', method: null, updatedAt: ago(60 * 24 * 9) },
+  'github-app': { kind: 'github-app', configured: false, label: null, method: null, updatedAt: null },
 }
+
+const githubAppInstallations = [{ id: 1, account: 'acme', repositorySelection: 'all' }]
 
 const mcpServers = new Map(
   [
@@ -199,8 +204,8 @@ const notifications = {
   vapidPublicKey: 'BK5TZgtSkbf6J6rxGHFPxV6Rgc35Ec7rv7hXSqtSrQdMkEj0b9OnuBKomLPX7pJRwg5zSNSoamZ7cFD50nSPULg',
   browsers: 1,
   webhooks: [
-    { id: 'w-slack', kind: 'slack', url: 'https://hooks.slack.com/services/T000/B000/xxxx', hasSecret: false, events: ['waiting', 'error'] },
-    { id: 'w-generic', kind: 'generic', url: 'https://example.com/hook', hasSecret: true, events: ['waiting', 'finished', 'error'] },
+    { id: 'w-slack', kind: 'slack', url: 'hooks.slack.com/…xxxx', hasSecret: false, events: ['waiting', 'error'] },
+    { id: 'w-generic', kind: 'generic', url: 'example.com/…hook', hasSecret: true, events: ['waiting', 'finished', 'error'] },
   ],
 }
 
@@ -215,6 +220,38 @@ const MODELS = {
     { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
     { id: 'gpt-5.5', label: 'GPT-5.5' },
   ],
+}
+
+// Mirrors apps/core's model_catalog: 'default' means the CLI has never been asked, so
+// the UI shows a static fallback count instead of a real one.
+const modelCatalog = new Map([
+  ['claude', { models: MODELS.claude, source: 'cli', refreshedAt: ago(60 * 24 * 3), error: null }],
+  ['codex', { models: MODELS.codex, source: 'default', refreshedAt: null, error: null }],
+])
+
+/** Mirrors core: saving a credential resets the catalog to 'default' while it re-asks the CLI. */
+function refreshModelsInBackground(id) {
+  modelCatalog.set(id, { ...modelCatalog.get(id), source: 'default', error: null })
+  setTimeout(() => modelCatalog.set(id, { models: MODELS[id], source: 'cli', refreshedAt: now(), error: null }), 1200)
+}
+
+function agentsResponse() {
+  return {
+    agents: ['claude', 'codex'].map((id) => {
+      const entry = modelCatalog.get(id)
+      return {
+        id,
+        label: id === 'claude' ? 'Claude Code' : 'Codex',
+        available: credentials[id].configured,
+        reason: credentials[id].configured ? null : 'Not configured',
+        models: entry.models,
+        defaultModel: entry.models[0].id,
+        modelsSource: entry.source,
+        modelsRefreshedAt: entry.refreshedAt,
+        modelsError: entry.error,
+      }
+    }),
+  }
 }
 
 const repos = [
@@ -252,6 +289,7 @@ function touch(id, patch = {}) {
   if (!t) return
   Object.assign(t.row, patch, { lastActivityAt: now() })
   broadcast(t.subscribers, { t: 'thread', thread: t.row })
+  broadcast(t.sharedSubscribers, { t: 'thread.shared', thread: toSharedThread(t.row) })
   broadcast(globalSubscribers, { t: 'thread', thread: listItem(t.row) })
 }
 
@@ -260,7 +298,10 @@ function appendEvent(id, event, { silent = false } = {}) {
   if (!t) return
   const seq = t.events.length + 1
   t.events.push({ seq, event })
-  if (!silent) broadcast(t.subscribers, { t: 'event', seq, event })
+  if (!silent) {
+    broadcast(t.subscribers, { t: 'event', seq, event })
+    broadcast(t.sharedSubscribers, { t: 'event', seq, event })
+  }
   if (event.type === 'status') {
     const patch = { status: event.status }
     if (event.status !== 'error') patch.error = null
@@ -273,6 +314,22 @@ function appendEvent(id, event, { silent = false } = {}) {
 
 const pendingPermissions = new Map()
 const pendingQuestions = new Map()
+
+/** Unlisted thread links: token -> threadId. Revoking drops the token, killing every link issued for it. */
+const shareTokens = new Map()
+
+function toSharedThread(row) {
+  return {
+    title: row.title,
+    projectName: projects.get(row.projectId)?.name ?? 'Unknown',
+    agent: row.agent,
+    model: row.model,
+    status: row.status,
+    error: row.error,
+    branch: row.branch,
+    baseBranch: row.baseBranch,
+  }
+}
 
 function setStatus(id, status, detail = null) {
   appendEvent(id, { type: 'status', status, detail, at: now() })
@@ -571,7 +628,30 @@ async function startThread(row, prompt) {
 
   addThread(thread({ id: 't-running', projectId: 'p-docs', title: 'Migrate docs build to Astro 6', branch: 'valet/astro-6-migration-1b2c', baseBranch: 'develop', agent: 'codex', model: 'gpt-6-astra', status: 'running', lastActivityAt: ago(1), createdAt: ago(20) }))
   threads.get('t-running').diffStats = { files: 12, additions: 318, deletions: 240 }
-  addThread(thread({ id: 't-waiting', title: 'Add rate limit headers to the API', branch: 'valet/rate-limit-headers-9d1e', permissions: 'ask', status: 'waiting', lastActivityAt: ago(3), createdAt: ago(30), pr: { url: 'https://github.com/acme/valet/pull/412', number: 412, state: 'open' } }))
+  addThread(
+    thread({ id: 't-waiting', title: 'Add rate limit headers to the API', branch: 'valet/rate-limit-headers-9d1e', permissions: 'ask', status: 'waiting', lastActivityAt: ago(3), createdAt: ago(30), pr: { url: 'https://github.com/acme/valet/pull/412', number: 412, state: 'open' } }),
+    [
+      { type: 'turn.start', turnId: 'turn-waiting', prompt: { text: 'Add per-route rate limit headers to the API and open a PR.', images: [] }, mode: 'queue', at: ago(4) },
+      {
+        type: 'tool.start',
+        turnId: 'turn-waiting',
+        itemId: 'w-edit',
+        name: 'edit',
+        vendorName: 'Edit',
+        input: { file_path: 'apps/core/src/http/middleware.ts', old_string: 'a', new_string: 'b' },
+        title: 'Edited apps/core/src/http/middleware.ts',
+        parentItemId: null,
+      },
+      { type: 'tool.output', turnId: 'turn-waiting', itemId: 'w-edit', output: 'ok', isError: false, exitCode: null, fileChanges: null },
+      { type: 'text.end', turnId: 'turn-waiting', itemId: 'w-text', text: 'Rate limit headers are wired up. Running the test suite needs approval in ask mode.' },
+      { type: 'permission.request', turnId: 'turn-waiting', requestId: 'perm-waiting-1', toolName: 'Bash', input: { command: 'npm test -w @valet/core' }, description: 'Run the core test suite', itemId: null },
+    ],
+  )
+  threads.get('t-waiting').diffStats = { files: 1, additions: 18, deletions: 2 }
+  pendingPermissions.set('perm-waiting-1', (decision) => {
+    appendEvent('t-waiting', { type: 'permission.response', turnId: 'turn-waiting', requestId: 'perm-waiting-1', decision, by: 'user' })
+    finish('t-waiting', 'turn-waiting', decision === 'allow' ? 'completed' : 'interrupted')
+  })
   addThread(
     thread({ id: 't-paused', title: 'Write release notes for 0.4', branch: 'valet/release-notes-0-4-77aa', status: 'paused', containerId: null, lastActivityAt: ago(60 * 3), createdAt: ago(60 * 5), costUsd: 1.13 }),
     [
@@ -702,6 +782,18 @@ rename to README.md
 `,
   },
 ]
+
+function changesResponse() {
+  return {
+    stats: { files: CHANGED_FILES.length, additions: CHANGED_FILES.reduce((n, f) => n + f.additions, 0), deletions: CHANGED_FILES.reduce((n, f) => n + f.deletions, 0) },
+    files: CHANGED_FILES,
+    commits: [
+      { sha: '9f2a7c1d3e4b5a6f7081920a1b2c3d4e5f607182', subject: 'valet: fix idle timer comparison', at: ago(8) },
+      { sha: '1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4', subject: 'Add regression test for pauseIdle', at: ago(6) },
+    ],
+    dirty: true,
+  }
+}
 
 const FILE_TREE = {
   '': [
@@ -847,17 +939,16 @@ async function handle(req, res) {
     if (method === 'PUT') Object.assign(settings, await readJson(req))
     return send(res, 200, settings)
   }
-  if (path === '/api/agents') {
-    return send(res, 200, {
-      agents: ['claude', 'codex'].map((id) => ({
-        id,
-        label: id === 'claude' ? 'Claude Code' : 'Codex',
-        available: credentials[id].configured,
-        reason: credentials[id].configured ? null : 'Not configured',
-        models: MODELS[id],
-        defaultModel: MODELS[id][0].id,
-      })),
-    })
+  if (path === '/api/agents') return send(res, 200, agentsResponse())
+  if (path === '/api/agents/refresh' && method === 'POST') {
+    const only = url.searchParams.get('agent')
+    for (const id of only ? [only] : ['claude', 'codex']) {
+      const entry = modelCatalog.get(id)
+      if (!entry) continue
+      if (!credentials[id].configured) modelCatalog.set(id, { ...entry, error: 'Not configured' })
+      else modelCatalog.set(id, { models: MODELS[id], source: 'cli', refreshedAt: now(), error: null })
+    }
+    return send(res, 200, agentsResponse())
   }
 
   if (path === '/api/notifications') return send(res, 200, notifications)
@@ -877,13 +968,17 @@ async function handle(req, res) {
   }
   if (path === '/api/notifications/webhooks' && method === 'PUT') {
     const body = await readJson(req)
-    notifications.webhooks = body.webhooks.map((w, i) => ({
-      id: w.id ?? `w-${i}-${randomUUID().slice(0, 8)}`,
-      kind: w.kind,
-      url: w.url,
-      hasSecret: w.kind === 'generic' && (Boolean(w.secret) || (notifications.webhooks.find((o) => o.id === w.id)?.hasSecret ?? false)),
-      events: w.events,
-    }))
+    notifications.webhooks = body.webhooks.map((w, i) => {
+      const previous = notifications.webhooks.find((o) => o.id === w.id)
+      return {
+        id: w.id ?? `w-${i}-${randomUUID().slice(0, 8)}`,
+        kind: w.kind,
+        // Core stores the URL encrypted and hands back only the host and last four characters.
+        url: w.url ? `${new URL(w.url).host}/…${w.url.slice(-4)}` : (previous?.url ?? ''),
+        hasSecret: w.kind === 'generic' && (Boolean(w.secret) || (previous?.hasSecret ?? false)),
+        events: w.events,
+      }
+    })
     return send(res, 200, notifications)
   }
   if (seg[0] === 'api' && seg[1] === 'notifications' && seg[2] === 'webhooks' && seg[4] === 'test' && method === 'POST') {
@@ -905,6 +1000,7 @@ async function handle(req, res) {
     if (login.polls >= 3 && login.status === 'pending') {
       login.status = 'complete'
       Object.assign(credentials.codex, { configured: true, label: 'ChatGPT (natey@example.com)', method: 'oauth', updatedAt: now() })
+      refreshModelsInBackground('codex')
     }
     return send(res, 200, { ...login, polls: undefined })
   }
@@ -918,6 +1014,24 @@ async function handle(req, res) {
     const defaultBranch = repo?.defaultBranch ?? 'main'
     return send(res, 200, { branches: [defaultBranch, 'develop', 'release/0.4', 'feature/astro-6'].filter((b, i, a) => a.indexOf(b) === i), defaultBranch })
   }
+  if (path === '/api/credentials/github/app') {
+    const configured = credentials['github-app'].configured
+    return send(res, 200, { webhookUrl: `${SITE_ORIGIN}/api/webhooks/github`, installations: configured ? githubAppInstallations : [], error: null })
+  }
+  if (path === '/api/credentials/github-app' && method === 'PUT') {
+    const body = await readJson(req)
+    if (body.appId === undefined) return fail(res, 400, 'App ID is required')
+    if (!body.privateKey?.trim()) return fail(res, 400, 'Private key is required')
+    if (!body.webhookSecret?.trim()) return fail(res, 400, 'Webhook secret is required')
+    if (!body.privateKey.includes('PRIVATE KEY')) return fail(res, 400, 'Private key must be the PEM file GitHub generated')
+    Object.assign(credentials['github-app'], {
+      configured: true,
+      label: `App ${body.appId} (${githubAppInstallations[0].account})`,
+      method: null,
+      updatedAt: now(),
+    })
+    return send(res, 200, credentials['github-app'])
+  }
   if (seg[0] === 'api' && seg[1] === 'credentials' && seg[2] in credentials) {
     const kind = seg[2]
     if (method === 'PUT') {
@@ -930,6 +1044,7 @@ async function handle(req, res) {
         method: kind === 'github' ? null : secret.startsWith('sk-ant-oat') ? 'oauth' : 'api-key',
         updatedAt: now(),
       })
+      if (modelCatalog.has(kind)) refreshModelsInBackground(kind)
       return send(res, 200, credentials[kind])
     }
     if (method === 'DELETE') {
@@ -1025,6 +1140,20 @@ async function handle(req, res) {
       return send(res, 204)
     }
     return send(res, 200, project)
+  }
+
+  if (seg[0] === 'api' && seg[1] === 'share' && seg[2]) {
+    const threadId = shareTokens.get(seg[2])
+    if (!threadId) return fail(res, 404, 'Not found')
+    const t = threads.get(threadId)
+    if (!t) return fail(res, 404, 'Not found')
+    if (seg[3] === 'changes') {
+      if (t.row.status === 'paused') return fail(res, 409, 'paused')
+      if (!LIVE.has(t.row.status)) return fail(res, 409, t.row.status)
+      return send(res, 200, changesResponse())
+    }
+    if (!seg[3]) return send(res, 200, { thread: toSharedThread(t.row) })
+    return fail(res, 404, 'Not found')
   }
 
   if (path === '/api/usage') {
@@ -1158,15 +1287,7 @@ async function handle(req, res) {
       case 'changes':
         if (t.row.status === 'paused') return fail(res, 409, 'paused')
         if (!LIVE.has(t.row.status)) return fail(res, 409, t.row.status)
-        return send(res, 200, {
-          stats: { files: CHANGED_FILES.length, additions: CHANGED_FILES.reduce((n, f) => n + f.additions, 0), deletions: CHANGED_FILES.reduce((n, f) => n + f.deletions, 0) },
-          files: CHANGED_FILES,
-          commits: [
-            { sha: '9f2a7c1d3e4b5a6f7081920a1b2c3d4e5f607182', subject: 'valet: fix idle timer comparison', at: ago(8) },
-            { sha: '1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4', subject: 'Add regression test for pauseIdle', at: ago(6) },
-          ],
-          dirty: true,
-        })
+        return send(res, 200, changesResponse())
       case 'files': {
         if (!LIVE.has(t.row.status)) return fail(res, 409, t.row.status)
         const dir = (url.searchParams.get('path') ?? '').replace(/^\/+|\/+$/g, '')
@@ -1180,7 +1301,10 @@ async function handle(req, res) {
         if (p === 'logo.png') return send(res, 200, { path: p, content: null, truncated: false, binary: true, size: 48211 })
         const content = FILES[p]
         if (content === undefined) return fail(res, 404, 'No such file')
-        return send(res, 200, { path: p, content, truncated: p === 'README.md', binary: false, size: Buffer.byteLength(content) })
+        // README.md simulates a file bigger than the read limit: the tree lists its real
+        // size (5144B) while only a short excerpt is actually sent back, truncated: true.
+        const truncated = p === 'README.md'
+        return send(res, 200, { path: p, content, truncated, binary: false, size: truncated ? 5144 : Buffer.byteLength(content) })
       }
       case 'portals':
         return send(res, 200, { portals: t.portals })
@@ -1219,6 +1343,19 @@ async function handle(req, res) {
           return send(res, 200, { service: svc, readiness })
         }
         return fail(res, 404, 'Not found')
+      }
+      case 'share': {
+        const existing = [...shareTokens].find(([, threadId]) => threadId === id)?.[0] ?? null
+        if (method === 'GET') return send(res, 200, { shared: existing !== null, url: existing ? `${SITE_ORIGIN}/s/${existing}` : null })
+        if (method === 'DELETE') {
+          if (existing) shareTokens.delete(existing)
+          return send(res, 204)
+        }
+        // POST: revoke any previous token for this thread, then mint a new one.
+        if (existing) shareTokens.delete(existing)
+        const token = randomUUID().replace(/-/g, '')
+        shareTokens.set(token, id)
+        return send(res, 200, { shared: true, url: `${SITE_ORIGIN}/s/${token}` })
       }
       case 'push':
         await sleep(600)
@@ -1261,6 +1398,18 @@ server.on('upgrade', (req, socket, head) => {
     if (url.pathname === '/api/stream') {
       globalSubscribers.add(ws)
       ws.on('close', () => globalSubscribers.delete(ws))
+      return
+    }
+    if (seg[0] === 'api' && seg[1] === 'share' && seg[2] && seg[3] === 'stream') {
+      const threadId = shareTokens.get(seg[2])
+      const t = threadId ? threads.get(threadId) : null
+      if (!t) return ws.close(4004, 'Not found')
+      const since = Number(url.searchParams.get('since') ?? 0)
+      for (const e of t.events) if (e.seq > since) ws.send(JSON.stringify({ t: 'event', seq: e.seq, event: e.event }))
+      ws.send(JSON.stringify({ t: 'thread.shared', thread: toSharedThread(t.row) }))
+      ws.send(JSON.stringify({ t: 'live' }))
+      t.sharedSubscribers.add(ws)
+      ws.on('close', () => t.sharedSubscribers.delete(ws))
       return
     }
     if (seg[0] === 'api' && seg[1] === 'threads' && seg[2]) {

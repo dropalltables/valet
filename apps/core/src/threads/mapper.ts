@@ -29,7 +29,7 @@ export function toListItem(row: ThreadRow, projectName: string, mcpServers: numb
 }
 
 /** What an unlisted link exposes: no ids, no cost, no way back into the sandbox. */
-export function toSharedThread(item: ThreadListItem): SharedThread {
+export function toSharedThread(item: Thread & { projectName: string }): SharedThread {
   return {
     title: item.title,
     projectName: item.projectName,

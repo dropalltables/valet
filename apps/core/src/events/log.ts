@@ -22,6 +22,8 @@ type ThreadState = {
   pending: Map<string, DeltaEvent>
   timer: NodeJS.Timeout | null
   subscribers: Set<(frame: StreamFrame) => void>
+  /** Unlisted-link viewers: they get the frames, but the thread is not "watched" for them. */
+  sharedSubscribers: Set<(frame: StreamFrame) => void>
 }
 
 /**
@@ -46,7 +48,7 @@ export class EventLog {
   private state(threadId: string): ThreadState {
     let s = this.threads.get(threadId)
     if (!s) {
-      s = { chain: Promise.resolve(), nextSeq: null, pending: new Map(), timer: null, subscribers: new Set() }
+      s = { chain: Promise.resolve(), nextSeq: null, pending: new Map(), timer: null, subscribers: new Set(), sharedSubscribers: new Set() }
       this.threads.set(threadId, s)
     }
     return s
@@ -116,7 +118,7 @@ export class EventLog {
   private fanout(threadId: string, frame: StreamFrame): void {
     const s = this.threads.get(threadId)
     if (!s) return
-    for (const cb of s.subscribers) {
+    for (const cb of [...s.subscribers, ...s.sharedSubscribers]) {
       try {
         cb(frame)
       } catch (err) {
@@ -178,11 +180,12 @@ export class EventLog {
     return { turnId, pendingPermissions: [...pending] }
   }
 
-  subscribe(threadId: string, cb: (frame: StreamFrame) => void): () => void {
+  subscribe(threadId: string, visibility: 'owner' | 'shared', cb: (frame: StreamFrame) => void): () => void {
     const s = this.state(threadId)
-    s.subscribers.add(cb)
+    const set = visibility === 'owner' ? s.subscribers : s.sharedSubscribers
+    set.add(cb)
     return () => {
-      s.subscribers.delete(cb)
+      set.delete(cb)
     }
   }
 
@@ -223,7 +226,7 @@ export class EventLog {
     this.fanout(threadId, { t: 'usage', usage })
   }
 
-  /** Whether anyone is watching the thread; sampling `docker stats` for nobody is waste. */
+  /** Whether the owner is watching; sampling `docker stats` for nobody, or for link holders, is waste. */
   hasSubscribers(threadId: string): boolean {
     return (this.threads.get(threadId)?.subscribers.size ?? 0) > 0
   }

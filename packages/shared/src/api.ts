@@ -173,8 +173,9 @@ export type PushSubscriptionRequest = { endpoint: string; keys: { p256dh: string
 /** Names one stored subscription: the one to forget, or the one to test. */
 export type PushEndpointRequest = { endpoint: string }
 
+/** `url` and `secret` are required only for a new webhook; omitted, the stored ones stand. */
 export type PutWebhooksRequest = {
-  webhooks: Array<{ id?: string; kind: WebhookKind; url: string; secret?: string; events: NotificationEvent[] }>
+  webhooks: Array<{ id?: string; kind: WebhookKind; url?: string; secret?: string; events: NotificationEvent[] }>
 }
 
 export type NotificationTestResponse = { ok: boolean; error: string | null }
@@ -360,12 +361,12 @@ export const SHARE_PATH = '/s'
  *
  * GET /api/share/:token -> SharedThreadResponse
  * GET /api/share/:token/changes -> ChangesResponse
- * WS  /api/share/:token/stream?since=<seq> -> StreamFrame, minus `portals` and
- *     `services` frames and with every cost figure removed.
+ * WS  /api/share/:token/stream?since=<seq> -> StreamFrame, minus `portals`,
+ *     `services` and `usage` frames, with `thread.shared` in place of `thread`, and
+ *     with every cost figure removed.
  *
  * These are the only routes under `/api` that need no session. A token that is
- * malformed, forged, or from a revoked generation answers 404, as does any token
- * once too many attempts have failed in the last minute.
+ * malformed, forged, or from a revoked generation answers 404.
  */
 export type SharedThread = {
   title: string
@@ -556,6 +557,8 @@ export type StreamFrame =
   | { t: 'live' }
   /** Thread row changed (status, pr, title, container). */
   | { t: 'thread'; thread: Thread }
+  /** The same row as an unlisted link sees it; sent instead of `thread` on `/api/share`. */
+  | { t: 'thread.shared'; thread: SharedThread }
   /** Full current list, sent once after replay and again whenever it changes. */
   | { t: 'portals'; portals: Portal[] }
   /** Full current list, sent once after replay and on every poll while the sandbox runs. */

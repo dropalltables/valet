@@ -36,7 +36,7 @@ import { LABEL_THREAD, diedOfMemory, sandboxName, volumeName, type DockerClient 
 import { waitForSupervisor, type ExecSocket, type SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError, badRequest, conflict, notFound } from '../errors.js'
 import type { EventLog } from '../events/log.js'
-import { loadProjectSecrets, redactString } from '../events/redact.js'
+import { loadProjectSecrets, redactString, type SecretRedactor } from '../events/redact.js'
 import { withAskpass } from '../git/askpass.js'
 import { computeChanges, git, type GitRunner } from '../git/changes.js'
 import { GitHub, canonicalRepoUrl, cloneUrl, parseGitHubUrl, requireRepoRef } from '../git/github.js'
@@ -77,6 +77,8 @@ const SUPERVISOR_REATTACH_MS = 5_000
 const SWEEP_INTERVAL_MS = 60_000
 const USAGE_INTERVAL_MS = 10_000
 const PR_REFRESH_MS = 60_000
+/** How long one repository role lookup stands in for the next comment by the same author. */
+const REPO_PERMISSION_TTL_MS = 5 * 60_000
 const FILE_CONTENT_LIMIT = 1024 * 1024
 
 type QueuedMessage = { turnId: string; text: string; images: PromptImage[] }
@@ -87,6 +89,8 @@ type LiveSandbox = { containerId: string; supervisor: SupervisorClient; exec: Ex
 export type WebhookOutcome =
   | 'ignored'
   | 'no-thread'
+  /** A `@valet` comment from someone without write access to the repository. */
+  | 'untrusted'
   | 'not-messageable'
   | 'messaged'
   | 'disabled'
@@ -133,6 +137,7 @@ export type ThreadServiceDeps = {
   settings: SettingsService
   portalUrls: PortalUrls
   mcp: McpServerStore
+  redactor: SecretRedactor
 }
 
 const now = (): string => new Date().toISOString()
@@ -140,6 +145,8 @@ const now = (): string => new Date().toISOString()
 export class ThreadService {
   private readonly live = new Map<string, Live>()
   private readonly prChecked = new Map<string, number>()
+  /** `repo\u0000login` -> whether that author may steer a thread through a `@valet` comment. */
+  private readonly repoWriters = new Map<string, { allowed: boolean; at: number }>()
   private sweeper: NodeJS.Timeout | null = null
   private usageSampler: NodeJS.Timeout | null = null
   private sampling = false
@@ -155,6 +162,7 @@ export class ThreadService {
   private readonly settings: SettingsService
   private readonly portalUrls: PortalUrls
   private readonly mcp: McpServerStore
+  private readonly redactor: SecretRedactor
 
   constructor(deps: ThreadServiceDeps) {
     this.db = deps.db
@@ -168,6 +176,7 @@ export class ThreadService {
     this.settings = deps.settings
     this.portalUrls = deps.portalUrls
     this.mcp = deps.mcp
+    this.redactor = deps.redactor
   }
 
   // ---- rows -----------------------------------------------------------------------
@@ -195,8 +204,13 @@ export class ThreadService {
     return row
   }
 
+  /**
+   * The row's `error` reaches the header, link holders, and webhook and push bodies,
+   * none of which go through the event log, so the secrets come out of it here too.
+   */
   private async setStatus(id: string, status: ThreadStatus, detail: string | null = null): Promise<void> {
-    const set: Partial<ThreadRow> = { status, error: status === 'error' ? detail : null }
+    const error = status === 'error' && detail !== null ? await this.redactor.applyToString(id, detail) : null
+    const set: Partial<ThreadRow> = { status, error }
     if (status === 'idle') set.lastActivityAt = new Date()
     await this.patch(id, set)
     await this.events.append(id, { type: 'status', status, detail, at: now() })
@@ -575,7 +589,7 @@ export class ThreadService {
         signal.throwIfAborted()
         // Before services start and before the first turn: nothing is writing to the volume yet.
         if (setup.ran && setup.ok) {
-          await this.snapshots.capture(project, await readSnapshotKey(run, 'HEAD', row.baseBranch), row.baseBranch, row.volumeName, signal)
+          await this.snapshots.capture(project.id, await readSnapshotKey(run, 'HEAD', row.baseBranch), row.baseBranch, row.volumeName, signal)
         }
       } else {
         await runResume(sandbox.supervisor, exec, projectEnv, sink)
@@ -630,6 +644,11 @@ export class ThreadService {
     }
   }
 
+  /**
+   * Brings the container back up. Declared services are reconciled by the supervisor
+   * itself at boot, so nothing here waits on their readiness: a message sent to a
+   * paused thread must not queue behind a dev server's health check.
+   */
   private async wakeLive(live: Live): Promise<void> {
     const id = live.id
     const row = await this.row(id)
@@ -639,7 +658,6 @@ export class ThreadService {
       const projectEnv = this.sandboxEnv(id, await this.projects.decryptedEnv(row.projectId))
       await writeEnvFile(sandbox.supervisor, projectEnv)
       await runResume(sandbox.supervisor, exec, projectEnv, this.sink(id))
-      await runServicesEnsure(sandbox.supervisor, exec, this.sink(id))
     }
     if (row.status === 'paused' || row.status === 'error') await this.setStatus(id, 'idle')
   }
@@ -1256,10 +1274,36 @@ export class ThreadService {
       case 'ci-failure':
         return this.applyCiFailure(match.row, intent)
       case 'comment':
-        return this.deliver(match.row, commentMessage(intent))
+        return (await this.mayCommand(match.project, intent)) ? this.deliver(match.row, commentMessage(intent)) : 'untrusted'
       case 'pr-state':
         return this.applyPrState(match.row, match.project, intent)
     }
+  }
+
+  /**
+   * Whether the comment's author may steer the thread: GitHub's own base role on the
+   * repository has to be write or better. `author_association` is not enough (it says
+   * `MEMBER` for any organization member and `COLLABORATOR` for read-only ones), and a
+   * lookup that fails is not permission, so the comment is dropped.
+   */
+  private async mayCommand(project: ProjectRow, intent: Extract<WebhookIntent, { kind: 'comment' }>): Promise<boolean> {
+    if (intent.isOwner) return true
+    const key = `${intent.repo}\u0000${intent.author}`.toLowerCase()
+    const now = Date.now()
+    for (const [k, entry] of this.repoWriters) if (now - entry.at >= REPO_PERMISSION_TTL_MS) this.repoWriters.delete(k)
+    const cached = this.repoWriters.get(key)
+    if (cached) return cached.allowed
+    const ref = parseGitHubUrl(project.repoUrl ?? '')
+    if (!ref) return false
+    const token = await this.credentials.githubTokenFor(ref)
+    if (!token) return false
+    const permission = await new GitHub(token).repoPermission(ref, intent.author).catch((err: unknown) => {
+      log.warn('collaborator permission lookup failed', { repo: intent.repo, author: intent.author, message: errorMessage(err) })
+      return 'none' as const
+    })
+    const allowed = permission === 'write' || permission === 'admin'
+    this.repoWriters.set(key, { allowed, at: now })
+    return allowed
   }
 
   /**

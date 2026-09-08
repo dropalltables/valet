@@ -24,7 +24,7 @@ export function SharedThreadView({ token }: { token: string }) {
   if (!data) return null
 
   const thread = data.thread
-  const live = stream.thread
+  const live = stream.shared
   const status = live?.status ?? thread.status
   const errorDetail = live ? live.error : thread.error
 

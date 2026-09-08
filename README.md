@@ -144,11 +144,11 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   run through core with a short-lived credential helper.
 - **Pull requests.** With a GitHub App configured, a failed check on a thread's pull
   request messages the thread to fix it and push (once per commit, five per pull
-  request, switchable per thread in its header); a comment from a repository
-  collaborator mentioning `@valet` is sent to the thread; closing, reopening, or
-  merging updates the thread's pull request state. A project chooses whether a turn
-  that ends with commits opens a pull request on its own, whether merging archives the
-  thread, and the default for the thread switch.
+  request, switchable per thread in its header); a comment mentioning `@valet` from
+  someone GitHub reports as having write access to the repository is sent to the
+  thread; closing, reopening, or merging updates the thread's pull request state. A
+  project chooses whether a turn that ends with commits opens a pull request on its
+  own, whether merging archives the thread, and the default for the thread switch.
 - **Desktop and terminal.** Every sandbox runs a VNC desktop (Xfce, Chromium) and a
   tmux session for the Terminal tab (the user's own shell, separate from the agent);
   both are relayed through core, so no extra ports are exposed.
@@ -223,9 +223,9 @@ A service has a port when it sets `port`, `portal`, or `health`. It runs as user
 `valet` in a login shell with the project environment, `PORT`, `PUBLIC_URL` (its portal
 URL), `VALET_THREAD_ID`, and `VALET_SERVICE` set; it is restarted when it exits and
 started again when the sandbox wakes. Logs go to `~/.valet/logs/<name>.log`.
-`valet services ensure` applies the file; core runs it after `.valet/setup` and on
-every wake. Inside the sandbox the agent (and the Terminal tab) can also manage
-services ad hoc:
+`valet services ensure` applies the file; core runs it after `.valet/setup`, and the
+supervisor reconciles it again whenever the sandbox boots. Inside the sandbox the
+agent (and the Terminal tab) can also manage services ad hoc:
 
 ```sh
 valet service start web --command 'npm run dev -- --port $PORT' --portal

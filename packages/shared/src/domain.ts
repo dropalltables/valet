@@ -185,7 +185,7 @@ export type PullRequest = {
   url: string
   number: number
   state: PullRequestState
-  /** Send CI failures and `@valet` comments on this pull request to the thread. */
+  /** Send CI failures on this pull request to the thread. */
   autoFixCi: boolean
   /** CI failures reported to the thread so far; at `CI_FIX_MAX_ATTEMPTS` Valet stops. */
   ciFixAttempts: number
@@ -454,7 +454,11 @@ export const MAX_WEBHOOKS = 5
 export type Webhook = {
   id: string
   kind: WebhookKind
-  /** For `ntfy` this is the full topic URL, so self-hosted instances work. */
+  /**
+   * Host and last four characters only. The URL is the whole credential for Slack,
+   * Discord and ntfy (for which it is the full topic URL, so self-hosted instances
+   * work), so the stored one never leaves core.
+   */
   url: string
   /** `generic` only: whether an HMAC secret is stored. The secret itself is never returned. */
   hasSecret: boolean

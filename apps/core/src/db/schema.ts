@@ -184,13 +184,14 @@ export const pushSubscriptions = pgTable('push_subscriptions', {
 })
 
 /**
- * Outbound notification target. `secretEnc` is the HMAC key for `generic` webhooks,
+ * Outbound notification target. The URL is the whole credential for Slack, Discord and
+ * ntfy, so it is encrypted like one. `secretEnc` is the HMAC key for `generic` webhooks,
  * and `position` is the index the operator submitted, which is the order shown back.
  */
 export const webhooks = pgTable('webhooks', {
   id: text('id').primaryKey(),
   kind: text('kind').$type<WebhookKind>().notNull(),
-  url: text('url').notNull(),
+  urlEnc: text('url_enc').notNull(),
   secretEnc: text('secret_enc'),
   events: jsonb('events').$type<NotificationEvent[]>().notNull(),
   position: integer('position').notNull(),

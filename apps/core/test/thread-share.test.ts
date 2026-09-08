@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import { test } from 'node:test'
-import type { ChangesResponse, Thread } from '@valet/shared'
+import type { ChangesResponse, SandboxUsage, Thread } from '@valet/shared'
 import { loadConfig } from '../src/config.js'
 import { Cipher } from '../src/crypto.js'
 import type { Db } from '../src/db/index.js'
@@ -12,7 +12,8 @@ import { ThreadShares } from '../src/threads/share.js'
 import { forShared } from '../src/ws/index.js'
 
 const THREAD = 'abc123'
-const MAX_FAILURES = 100
+
+const USAGE: SandboxUsage = { memoryBytes: 512 * 1024 * 1024, cpuPercent: 12 }
 
 const EMPTY_CHANGES: ChangesResponse = { stats: { files: 0, additions: 0, deletions: 0 }, files: [], commits: [], dirty: false }
 
@@ -120,15 +121,11 @@ test('a portal token is not a share token, and a share token is not a portal tok
   assert.equal(portalAuth.read(tokenOf(shareUrl)), null)
 })
 
-test('attempts are refused once the budget is spent, and allowed again a minute later', async (t) => {
-  t.mock.timers.enable({ apis: ['Date'] })
+test('bad tokens never cost a valid link its answer', async () => {
   const { shares: s } = shares()
   const valid = tokenOf((await s.create(THREAD)).url ?? '')
 
-  for (let i = 0; i < MAX_FAILURES; i += 1) assert.equal(await s.resolve('guess'), null)
-  assert.equal(await s.resolve(valid), null)
-
-  t.mock.timers.tick(60_000)
+  for (let i = 0; i < 500; i += 1) assert.equal(await s.resolve('guess'), null)
   assert.equal(await s.resolve(valid), THREAD)
 })
 
@@ -168,26 +165,39 @@ const THREAD_ROW: Thread = {
   archivedAt: null,
 }
 
-test('a link holder sees the transcript without cost, sandbox handles, ports, or services', () => {
-  const thread = forShared({ t: 'thread', thread: THREAD_ROW })
-  assert.deepEqual(thread, { t: 'thread', thread: { ...THREAD_ROW, costUsd: null, containerId: null, agentSessionId: null } })
+test('a link holder sees the transcript without ids, cost, sandbox handles, ports, services, or usage', () => {
+  const thread = forShared({ t: 'thread', thread: THREAD_ROW }, 'Valet')
+  assert.deepEqual(thread, {
+    t: 'thread.shared',
+    thread: {
+      title: 'Add sharing',
+      projectName: 'Valet',
+      agent: 'claude',
+      model: 'sonnet',
+      status: 'running',
+      error: null,
+      branch: 'valet/add-sharing-1a2b',
+      baseBranch: 'main',
+    },
+  })
 
-  assert.equal(forShared({ t: 'portals', portals: [] }), null)
-  assert.equal(forShared({ t: 'services', services: [] }), null)
-  assert.equal(forShared({ t: 'event', seq: 3, event: { type: 'session', agentSessionId: 'sess-1' } }), null)
+  assert.equal(forShared({ t: 'portals', portals: [] }, 'Valet'), null)
+  assert.equal(forShared({ t: 'services', services: [] }, 'Valet'), null)
+  assert.equal(forShared({ t: 'usage', usage: USAGE }, 'Valet'), null)
+  assert.equal(forShared({ t: 'event', seq: 3, event: { type: 'session', agentSessionId: 'sess-1' } }, 'Valet'), null)
 
   const usage = forShared({
     t: 'event',
     seq: 4,
     event: { type: 'usage', turnId: 't1', usage: { inputTokens: 10, outputTokens: 2, costUsd: 0.5 }, rateLimits: [{ window: 'five_hour', utilization: 0.4, resetsAt: null }] },
-  })
+  }, 'Valet')
   assert.deepEqual(usage, { t: 'event', seq: 4, event: { type: 'usage', turnId: 't1', usage: { inputTokens: 10, outputTokens: 2 }, rateLimits: null } })
 
   const end = forShared({
     t: 'event',
     seq: 5,
     event: { type: 'turn.end', turnId: 't1', status: 'completed', error: null, usage: { inputTokens: 10, outputTokens: 2, costUsd: 0.5 }, at: '2026-09-07T00:00:00.000Z' },
-  })
+  }, 'Valet')
   assert.deepEqual(end, {
     t: 'event',
     seq: 5,
@@ -195,6 +205,6 @@ test('a link holder sees the transcript without cost, sandbox handles, ports, or
   })
 
   const text = { t: 'event', seq: 6, event: { type: 'text.end', turnId: 't1', itemId: 'i1', text: 'done' } } as const
-  assert.deepEqual(forShared(text), text)
-  assert.deepEqual(forShared({ t: 'live' }), { t: 'live' })
+  assert.deepEqual(forShared(text, 'Valet'), text)
+  assert.deepEqual(forShared({ t: 'live' }, 'Valet'), { t: 'live' })
 })

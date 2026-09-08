@@ -18,6 +18,8 @@ const THREAD = 'abc123'
 const PORT = 8000
 /** Past core's injection cap, so the page has to go back to streaming. */
 const BIG_HTML_BYTES = 9 * 1024 * 1024
+/** How long the streaming page waits before finishing; the shell must not wait with it. */
+const SLOW_TAIL_MS = 500
 const HOST = `t-${THREAD}-p${PORT}.localhost:3000`
 
 function listen(server: Server): Promise<number> {
@@ -94,11 +96,18 @@ function fakeApp(): Server {
       return
     }
     if (req.url === `/portal/${PORT}/big`) {
-      // Chunked, so nothing declares its size up front; it stops being injectable mid-body.
+      // Chunked, so nothing declares its size up front.
       res.writeHead(200, { 'content-type': 'text/html' })
       res.write('<html><body>')
       for (let sent = 0; sent < BIG_HTML_BYTES; sent += 64 * 1024) res.write('x'.repeat(64 * 1024))
       res.end('</body></html>')
+      return
+    }
+    if (req.url === `/portal/${PORT}/slow`) {
+      // A streaming render: the shell goes out at once, the rest much later.
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.write('<html><head><title>App</title></head><body>')
+      setTimeout(() => res.end('<main>done</main></body></html>'), SLOW_TAIL_MS)
       return
     }
     if (req.url === `/portal/${PORT}/data.json`) {
@@ -222,7 +231,7 @@ test('portal gateway injects the review widget into an owner\'s HTML', async (t)
   assert.match(page.body, /accept-encoding: identity/)
   assert.equal(page.headers['content-encoding'], undefined)
   assert.equal(page.headers['content-length'], String(Buffer.byteLength(page.body)))
-  const nonce = /<script src="\/__valet\/review\.js" defer nonce="([^"]+)"><\/script><\/body>/.exec(page.body)?.[1]
+  const nonce = /<body><script src="\/__valet\/review\.js" defer nonce="([^"]+)"><\/script><h1>App<\/h1>/.exec(page.body)?.[1]
   assert.ok(nonce)
   assert.equal(page.headers['content-security-policy'], `default-src 'self'; script-src 'self' 'nonce-${nonce}'`)
 
@@ -255,12 +264,40 @@ test('portal gateway injects the review widget into an owner\'s HTML', async (t)
   assert.equal(sent.length, 1)
 })
 
-test('portal gateway streams an HTML page that outgrows the injection cap', async (t) => {
+test('portal gateway injects into a large chunked page without holding it', async (t) => {
   const corePort = await reviewCore(t)
   const page = await send(corePort, `/portal/${THREAD}/${PORT}/big`, { method: 'GET', headers: { accept: 'text/html' } })
   assert.equal(page.status, 200)
-  assert.equal(page.bytes.byteLength, '<html><body>'.length + BIG_HTML_BYTES + '</body></html>'.length)
-  assert.doesNotMatch(page.body.slice(-200), /review\.js/)
+  const tag = '<script src="/__valet/review.js" defer></script>'
+  assert.equal(page.bytes.byteLength, '<html><body>'.length + tag.length + BIG_HTML_BYTES + '</body></html>'.length)
+  assert.equal(page.body.slice(0, '<html><body>'.length + tag.length), `<html><body>${tag}`)
+  // Nothing was buffered, so the app's own bytes came through untouched.
+  assert.equal(page.body.slice(-14), '</body></html>')
+})
+
+test('portal gateway sends a streaming page\'s shell before the app has finished it', async (t) => {
+  const corePort = await reviewCore(t)
+  const startedAt = Date.now()
+  const { firstByteMs, body } = await new Promise<{ firstByteMs: number; body: string }>((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port: corePort, path: `/portal/${THREAD}/${PORT}/slow`, method: 'GET', headers: { host: HOST, accept: 'text/html' } },
+      (res) => {
+        let firstByteMs = -1
+        const chunks: Buffer[] = []
+        res.on('data', (chunk: Buffer) => {
+          if (firstByteMs < 0) firstByteMs = Date.now() - startedAt
+          chunks.push(chunk)
+        })
+        res.on('end', () => resolve({ firstByteMs, body: Buffer.concat(chunks).toString('utf8') }))
+      },
+    )
+    req.on('error', reject)
+    req.end()
+  })
+
+  assert.ok(firstByteMs < SLOW_TAIL_MS / 2, `first byte after ${firstByteMs} ms`)
+  assert.match(body, /<head><script src="\/__valet\/review\.js" defer><\/script><title>App<\/title>/)
+  assert.match(body, /<main>done<\/main><\/body><\/html>$/)
 })
 
 test('portal gateway leaves pages alone when the service turns review off', async (t) => {

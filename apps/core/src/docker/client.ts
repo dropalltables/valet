@@ -30,6 +30,9 @@ export const volumeName = (threadId: string): string => `valet-home-${threadId}`
 /** `key` is the short snapshot key; the full one is only stored on the project row. */
 export const snapshotVolumeName = (projectId: string, key: string): string => `valet-snap-${projectId}-${key}`
 
+/** The daemon reports `CreatedAt` for every volume; dockerode's types leave it out. */
+export type SnapshotVolume = Docker.VolumeInspectInfo & { CreatedAt?: string }
+
 export type SandboxSpec = {
   threadId: string
   projectId: string
@@ -339,7 +342,7 @@ export class DockerClient {
     }
   }
 
-  listSnapshotVolumes(): Promise<Docker.VolumeInspectInfo[]> {
+  listSnapshotVolumes(): Promise<SnapshotVolume[]> {
     return this.docker.listVolumes({ filters: { label: [`${LABEL_SNAPSHOT}=true`] } }).then((r) => r.Volumes ?? [])
   }
 

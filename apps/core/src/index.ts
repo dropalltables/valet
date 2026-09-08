@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   })
   const portalUrls = new PortalUrls(cfg)
   const mcp = new McpServerStore(db, cipher)
-  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, snapshots, credentials, settings, portalUrls, mcp })
+  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, snapshots, credentials, settings, portalUrls, mcp, redactor })
   const shares = new ThreadShares(cfg, cipher, threads)
   const catalog = new ModelCatalog(db, docker, credentials)
   const deviceLogins = new DeviceLoginManager(db, docker, credentials, () => void catalog.refresh('codex'))

@@ -238,7 +238,7 @@ export const REVIEW_WIDGET_JS = `(function () {
 })()
 `
 
-/** HTML larger than this is served untouched: injection has to buffer the whole body. */
+/** A compressed document larger than this is served untouched: decoding it has to buffer. */
 export const MAX_HTML_BYTES = 8 * 1024 * 1024
 const CSP_HEADERS = ['content-security-policy', 'content-security-policy-report-only']
 
@@ -316,13 +316,34 @@ export function allowInjectedScript(headers: Headers): string | null {
   return used ? nonce : null
 }
 
-/** The widget's script tag before the last `</body>`, or at the end when there is none. */
+export function widgetTag(nonce: string | null): string {
+  return `<script src="${PORTAL_REVIEW_SCRIPT_PATH}" defer${nonce === null ? '' : ` nonce="${nonce}"`}></script>`
+}
+
+/**
+ * The tag goes just after the document's `<head>` (or `<body>`) open tag, which is the
+ * first place a streaming response can offer: waiting for `</body>` would mean holding
+ * the whole page. `defer` keeps it running after the document is parsed either way.
+ */
+const OPEN_TAG_RE = /<(?:head|body)\b[^>]*>/i
+
+/**
+ * Byte offset just past that open tag in what has arrived so far, or null when neither
+ * tag is in it yet. Decoded as latin1, where one byte is one character, so the match
+ * index is a byte offset and a multi-byte character split across chunks cannot confuse it.
+ */
+export function injectionPoint(prefix: Buffer): number | null {
+  const m = OPEN_TAG_RE.exec(prefix.toString('latin1'))
+  return m ? m.index + m[0].length : null
+}
+
+/** The same insertion for a body that had to be buffered, on the decoded text. */
 export function injectWidget(html: string, nonce: string | null): string {
-  const tag = `<script src="${PORTAL_REVIEW_SCRIPT_PATH}" defer${nonce === null ? '' : ` nonce="${nonce}"`}></script>`
-  // Matched on the original string: `toLowerCase()` can change its length (`\u0130` becomes two chars).
-  let close = -1
-  for (const match of html.matchAll(/<\/body/gi)) close = match.index
-  return close === -1 ? html + tag : html.slice(0, close) + tag + html.slice(close)
+  const m = OPEN_TAG_RE.exec(html)
+  const tag = widgetTag(nonce)
+  if (!m) return html + tag
+  const at = m.index + m[0].length
+  return html.slice(0, at) + tag + html.slice(at)
 }
 
 /** The comment as it reads in the transcript. */

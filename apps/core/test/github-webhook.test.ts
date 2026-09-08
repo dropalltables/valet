@@ -130,6 +130,7 @@ test('comments are forwarded only when they mention valet', () => {
     prNumber: 42,
     branch: null,
     author: 'octocat',
+    isOwner: true,
     url: 'https://github.com/acme/widgets/pull/42#issuecomment-1',
     body: 'Hey @valet please rebase this',
   })
@@ -157,15 +158,19 @@ test('comments are forwarded only when they mention valet', () => {
   )
 })
 
-test('comments from outside the repository are not forwarded', () => {
-  // The signature proves GitHub relayed the comment, not that its author is trusted.
-  for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'MANNEQUIN']) {
-    assert.equal(parseWebhookEvent('issue_comment', issueComment('@valet run the tests', true, association)), null, association)
-  }
-  for (const association of ['OWNER', 'MEMBER', 'COLLABORATOR']) {
+test('only OWNER is trusted from the payload; every other association is resolved later', () => {
+  // GitHub says MEMBER for any organization member and COLLABORATOR for read-only ones,
+  // so the delivery only records who wrote the comment; ThreadService resolves the rest.
+  for (const association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 'MEMBER', 'COLLABORATOR']) {
     const intent = parseWebhookEvent('issue_comment', issueComment('@valet run the tests', true, association))
     assert.equal(intent?.kind, 'comment', association)
+    assert.equal(intent && intent.kind === 'comment' ? intent.isOwner : true, false, association)
   }
+  const owner = parseWebhookEvent('issue_comment', issueComment('@valet run the tests', true, 'OWNER'))
+  assert.equal(owner && owner.kind === 'comment' ? owner.isOwner : false, true)
+
+  // A comment GitHub relayed without an author cannot be attributed to anyone.
+  assert.equal(parseWebhookEvent('issue_comment', { action: 'created', repository, comment: { body: '@valet go', html_url: 'u', author_association: 'OWNER', user: null }, issue: { number: 42, pull_request: {} } }), null)
   assert.throws(() => parseWebhookEvent('issue_comment', { action: 'created', repository, comment: { body: '@valet go', html_url: 'u' }, issue: { number: 42, pull_request: {} } }))
 })
 

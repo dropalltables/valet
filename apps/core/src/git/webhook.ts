@@ -30,7 +30,17 @@ export type WebhookIntent =
       check: string
       detailsUrl: string
     }
-  | { kind: 'comment'; repo: string; prNumber: number; branch: null; author: string; url: string; body: string }
+  | {
+      kind: 'comment'
+      repo: string
+      prNumber: number
+      branch: null
+      author: string
+      /** `OWNER` needs no permission lookup; every other author is resolved against the repository. */
+      isOwner: boolean
+      url: string
+      body: string
+    }
   | { kind: 'pr-state'; repo: string; prNumber: number; branch: string | null; state: PullRequestState }
 
 const repository = z.object({ full_name: z.string(), html_url: z.string() })
@@ -87,13 +97,6 @@ const comment = z.object({
   user: z.object({ login: z.string() }).nullable().default(null),
 })
 
-/**
- * A mentioning comment becomes a prompt for an agent that can push to the branch, so
- * only people GitHub says have write access to the repository may write one. The
- * signature proves GitHub relayed the comment, not who wrote it.
- */
-const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR']
-
 const issueCommentEvent = z.object({
   action: z.string(),
   repository,
@@ -113,8 +116,9 @@ const MENTION_RE = /(^|[^\w@])@valet\b/i
 
 /**
  * A delivery Valet acts on, or null for everything else (other actions, successful
- * checks, comments without a mention or from an untrusted author, issue comments that
- * are not on a pull request).
+ * checks, comments without a mention or without an author, issue comments that are
+ * not on a pull request). Whether a comment's author may steer the thread is decided
+ * against the repository, not here.
  * Throws only when the payload does not match the event's documented shape.
  */
 export function parseWebhookEvent(event: string, payload: unknown): WebhookIntent | null {
@@ -185,9 +189,18 @@ export function parseWebhookEvent(event: string, payload: unknown): WebhookInten
   }
 }
 
+/**
+ * A mentioning comment becomes a prompt for an agent that can push to the branch and
+ * holds the project's secrets, so who wrote it decides whether it is delivered. The
+ * signature proves GitHub relayed the comment, not that its author has any access:
+ * `author_association` says `MEMBER` for any organization member and `COLLABORATOR`
+ * for read-only ones too, so only `OWNER` is conclusive here and the rest are
+ * resolved against the repository before delivery.
+ */
 function commentIntent(repo: string, prNumber: number, c: z.infer<typeof comment>): WebhookIntent | null {
-  if (!TRUSTED_ASSOCIATIONS.includes(c.author_association)) return null
-  return { kind: 'comment', repo, prNumber, branch: null, author: c.user?.login ?? 'someone', url: c.html_url, body: c.body }
+  const author = c.user?.login ?? null
+  if (!author) return null
+  return { kind: 'comment', repo, prNumber, branch: null, author, isOwner: c.author_association === 'OWNER', url: c.html_url, body: c.body }
 }
 
 /** A reopened pull request is open again; auto-fix must resume with it. */

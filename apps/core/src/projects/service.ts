@@ -37,11 +37,6 @@ export type UpdateProjectInput = {
 }
 export type PutProjectEnvInput = { vars: Array<{ name: string; value?: string | undefined; kind: 'plain' | 'secret' }> }
 
-function maskValue(value: string): string {
-  if (value.length <= 4) return '****'
-  return `${value.slice(0, 2)}…${value.slice(-2)}`
-}
-
 export class ProjectService {
   constructor(
     private readonly db: Db,

@@ -107,6 +107,21 @@ export class GitHub {
     }
   }
 
+  /**
+   * The user's base role on the repository. GitHub folds the finer roles into these
+   * four: `maintain` reports as `write`, `triage` as `read`, and someone with no
+   * access at all as `none`.
+   */
+  async repoPermission(ref: RepoRef, login: string): Promise<'admin' | 'write' | 'read' | 'none'> {
+    try {
+      const res = await this.octokit.repos.getCollaboratorPermissionLevel({ owner: ref.owner, repo: ref.repo, username: login })
+      const permission = res.data.permission
+      return permission === 'admin' || permission === 'write' || permission === 'read' ? permission : 'none'
+    } catch (err) {
+      translate(err)
+    }
+  }
+
   async pullRequestState(ref: RepoRef, number: number): Promise<'open' | 'merged' | 'closed'> {
     try {
       const res = await this.octokit.pulls.get({ owner: ref.owner, repo: ref.repo, pull_number: number })

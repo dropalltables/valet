@@ -8,6 +8,7 @@ import { HttpError } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { errorMessage, logger } from '../logger.js'
 import type { PortalGateway } from '../portals/gateway.js'
+import { toSharedThread } from '../threads/mapper.js'
 import type { ThreadService } from '../threads/service.js'
 import type { ThreadShares } from '../threads/share.js'
 
@@ -139,13 +140,14 @@ function serveGlobal(ws: WebSocket, deps: WsDeps): void {
 }
 
 /**
- * What a link holder is allowed to see: the transcript and the thread row, minus
- * every cost figure, the sandbox handles, and the ports and services.
+ * What a link holder is allowed to see: the transcript and the reduced thread row,
+ * minus every cost figure, the ids, the sandbox handles, the ports and services, and
+ * the container's resource samples.
  */
-export function forShared(frame: StreamFrame): StreamFrame | null {
+export function forShared(frame: StreamFrame, projectName: string): StreamFrame | null {
   switch (frame.t) {
     case 'thread':
-      return { t: 'thread', thread: { ...frame.thread, costUsd: null, containerId: null, agentSessionId: null } }
+      return { t: 'thread.shared', thread: toSharedThread({ ...frame.thread, projectName }) }
     case 'event': {
       const event = frame.event
       // `session` names the owner's agent session; `rateLimits` is their account quota.
@@ -162,6 +164,7 @@ export function forShared(frame: StreamFrame): StreamFrame | null {
     }
     case 'portals':
     case 'services':
+    case 'usage':
       return null
     default:
       return frame
@@ -169,13 +172,15 @@ export function forShared(frame: StreamFrame): StreamFrame | null {
 }
 
 async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: number, visibility: 'owner' | 'shared'): Promise<void> {
+  let projectName = ''
   const send = (frame: StreamFrame): void => {
-    const out = visibility === 'shared' ? forShared(frame) : frame
+    const out = visibility === 'shared' ? forShared(frame, projectName) : frame
     if (out) sendJson(ws, out)
   }
   let thread
   try {
     thread = await deps.threads.get(id)
+    projectName = thread.projectName
   } catch (err) {
     send({ t: 'error', message: errorMessage(err) })
     ws.close(err instanceof HttpError && err.status === 404 ? CLOSE_NOT_FOUND : CLOSE_ERROR, errorMessage(err))
@@ -187,7 +192,7 @@ async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: numbe
   let replaying = true
   let lastSeq = since
   const held: StreamFrame[] = []
-  const unsubscribe = deps.events.subscribe(id, (frame: StreamFrame) => {
+  const unsubscribe = deps.events.subscribe(id, visibility, (frame: StreamFrame) => {
     if (replaying) {
       held.push(frame)
       return

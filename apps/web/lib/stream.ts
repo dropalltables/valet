@@ -1,13 +1,26 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { LIVE_STATUSES, emptyTranscript, reduceEvent, type Portal, type SandboxUsage, type Service, type StreamFrame, type Thread, type Transcript } from '@valet/shared'
+import {
+  LIVE_STATUSES,
+  emptyTranscript,
+  reduceEvent,
+  type Portal,
+  type SandboxUsage,
+  type Service,
+  type SharedThread,
+  type StreamFrame,
+  type Thread,
+  type Transcript,
+} from '@valet/shared'
 import { wsUrl } from './api'
 
 export type StreamState = {
   transcript: Transcript
   /** Thread row pushed by core; null until the first `thread` frame. */
   thread: Thread | null
+  /** The reduced row an unlisted link gets instead; null on an owner's stream. */
+  shared: SharedThread | null
   /** Listening ports in the sandbox; replaced whole on every `portals` frame. */
   portals: Portal[]
   /** Managed services; replaced whole on every `services` frame. */
@@ -22,11 +35,16 @@ export type StreamState = {
   error: string | null
 }
 
+/** Rows the Services tab shows: managed services plus listening ports no service owns. */
+export function serviceRowCount(services: Service[], portals: Portal[]): number {
+  return services.length + portals.filter((p) => !services.some((s) => s.port === p.port)).length
+}
+
 const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 15000
 
 function initial(): StreamState {
-  return { transcript: emptyTranscript(), thread: null, portals: [], services: [], usage: null, live: false, connected: false, everConnected: false, error: null }
+  return { transcript: emptyTranscript(), thread: null, shared: null, portals: [], services: [], usage: null, live: false, connected: false, everConnected: false, error: null }
 }
 
 /**
@@ -76,6 +94,9 @@ export function useThreadStream(path: string): StreamState {
           case 'thread':
             // A paused sandbox has no usage; keeping the last sample would show it as current after a wake.
             setState((s) => ({ ...s, thread: frame.thread, usage: LIVE_STATUSES.includes(frame.thread.status) ? s.usage : null }))
+            return
+          case 'thread.shared':
+            setState((s) => ({ ...s, shared: frame.thread }))
             return
           case 'portals':
             setState((s) => ({ ...s, portals: frame.portals }))
