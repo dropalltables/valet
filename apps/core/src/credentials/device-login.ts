@@ -48,10 +48,10 @@ export class DeviceLoginManager {
     private readonly onStored: () => void,
   ) {}
 
-  /** Helper containers only live as long as the core process that started them. */
+  /** Helper containers (device logins, volume copies) only live as long as the core process that started them. */
   async reconcile(): Promise<void> {
     for (const c of await this.docker.listHelpers()) {
-      log.info('removing orphaned login helper', { id: c.Id, names: c.Names })
+      log.info('removing orphaned helper', { id: c.Id, names: c.Names })
       await this.docker.remove(c.Id).catch((err) => log.warn('helper cleanup failed', { id: c.Id, err }))
     }
     await this.db

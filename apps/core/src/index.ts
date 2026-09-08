@@ -18,6 +18,7 @@ import { PortalAuth } from './portals/auth.js'
 import { PortalGateway } from './portals/gateway.js'
 import { PortalUrls } from './portals/urls.js'
 import { ProjectService } from './projects/service.js'
+import { SnapshotStore } from './projects/snapshots.js'
 import { createApp } from './routes/index.js'
 import { SettingsService } from './settings.js'
 import { ThreadService } from './threads/service.js'
@@ -42,14 +43,15 @@ async function main(): Promise<void> {
   const events = new EventLog(db)
   const credentials = new CredentialStore(db, cipher)
   const settings = new SettingsService(db, cfg, cipher)
-  const projects = new ProjectService(db, cipher, cfg, events, async (repoUrl) => {
+  const snapshots = new SnapshotStore(db, cfg, docker, events)
+  const projects = new ProjectService(db, cipher, cfg, events, snapshots, async (repoUrl) => {
     const token = await credentials.githubToken()
     const ref = parseGitHubUrl(repoUrl)
     if (!token || !ref) return null
     return new GitHub(token).defaultBranch(ref).catch(() => null)
   })
   const portalUrls = new PortalUrls(cfg)
-  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings, portalUrls })
+  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, snapshots, credentials, settings, portalUrls })
   const catalog = new ModelCatalog(db, docker, credentials)
   const deviceLogins = new DeviceLoginManager(db, docker, credentials, () => void catalog.refresh('codex'))
   const usage = new UsageService(db)
@@ -61,7 +63,7 @@ async function main(): Promise<void> {
   const notifications = new NotificationService({ db, cfg, cipher, events, settings })
   notifications.watch()
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, threads, portals, usage })
+  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, snapshots, threads, portals, usage })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
     log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server
@@ -71,6 +73,7 @@ async function main(): Promise<void> {
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))
   threads.startSweeper()
   docker.startImageWatcher()
+  snapshots.startSweeper()
   await catalog.refreshStale(STALE_AFTER_MS).catch((err: unknown) => log.error('model catalog check failed', { err }))
 
   let shuttingDown = false
@@ -82,6 +85,7 @@ async function main(): Promise<void> {
     timer.unref()
     server.close()
     docker.shutdown()
+    snapshots.stopSweeper()
     void threads
       .shutdown()
       .then(() => pool.end())

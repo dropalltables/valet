@@ -37,6 +37,7 @@ import type {
   SendMessageResponse,
   ServicesResponse,
   SessionResponse,
+  SnapshotsResponse,
   Settings,
   SharePortalRequest,
   SharePortalResponse,
@@ -97,6 +98,7 @@ export const api = {
     session: () => request<SessionResponse>('/api/auth/session'),
   },
   health: () => request<Health>('/api/health'),
+  snapshots: () => request<SnapshotsResponse>('/api/snapshots'),
   settings: {
     get: () => request<Settings>('/api/settings'),
     update: (body: UpdateSettingsRequest) => request<Settings>('/api/settings', { method: 'PUT', body: json(body) }),
@@ -139,6 +141,7 @@ export const api = {
       request<Project>(`/api/projects/${id}`, { method: 'PATCH', body: json(body) }),
     remove: (id: string, force = false) =>
       request<void>(`/api/projects/${id}${q({ force: force ? 1 : undefined })}`, { method: 'DELETE' }),
+    removeSnapshot: (id: string) => request<void>(`/api/projects/${id}/snapshot`, { method: 'DELETE' }),
     env: {
       get: (id: string) => request<ProjectEnvResponse>(`/api/projects/${id}/env`),
       put: (id: string, body: PutProjectEnvRequest) =>

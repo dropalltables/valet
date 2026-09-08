@@ -36,6 +36,7 @@ import type { NotificationService } from '../notifications/service.js'
 import { pushEndpointSchema, pushSubscriptionSchema, putWebhooksSchema } from '../notifications/service.js'
 import type { PortalGateway } from '../portals/gateway.js'
 import type { ProjectService } from '../projects/service.js'
+import type { SnapshotStore } from '../projects/snapshots.js'
 import type { SettingsService } from '../settings.js'
 import { updateSettingsSchema } from '../settings.js'
 import type { ThreadService } from '../threads/service.js'
@@ -56,6 +57,7 @@ export type AppDeps = {
   settings: SettingsService
   notifications: NotificationService
   projects: ProjectService
+  snapshots: SnapshotStore
   threads: ThreadService
   portals: PortalGateway
   usage: UsageService
@@ -295,10 +297,18 @@ export function createApp(deps: AppDeps): Hono {
     await deps.projects.remove(id)
     return c.body(null, 204)
   })
+  app.delete('/api/projects/:id/snapshot', async (c) => {
+    const id = c.req.param('id')
+    await deps.projects.get(id)
+    await deps.snapshots.drop(id, 'deleted from the project page')
+    return c.body(null, 204)
+  })
   app.get('/api/projects/:id/env', async (c) => c.json({ vars: await deps.projects.listEnv(c.req.param('id')) }))
   app.put('/api/projects/:id/env', jsonBody(putEnvSchema), async (c) =>
     c.json({ vars: await deps.projects.putEnv(c.req.param('id'), c.req.valid('json')) }),
   )
+
+  app.get('/api/snapshots', async (c) => c.json(await deps.snapshots.usage()))
 
   // ---- threads ---------------------------------------------------------------------------
 

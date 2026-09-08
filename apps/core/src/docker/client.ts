@@ -1,9 +1,11 @@
 import os from 'node:os'
+import { StringDecoder } from 'node:string_decoder'
 import Docker from 'dockerode'
 import type { SandboxImageStatus } from '@valet/shared'
 import { PORTAL_ENV, SANDBOX } from '@valet/shared'
 import type { Config } from '../config.js'
 import { statusOf } from '../errors.js'
+import { shortHex } from '../ids.js'
 import { errorMessage, logger } from '../logger.js'
 
 const log = logger('docker')
@@ -12,6 +14,11 @@ export const LABEL_MANAGED = 'valet.managed'
 export const LABEL_THREAD = 'valet.thread'
 export const LABEL_PROJECT = 'valet.project'
 export const LABEL_HELPER = 'valet.helper'
+export const LABEL_SNAPSHOT = 'valet.snapshot'
+export const LABEL_KEY = 'valet.key'
+
+/** Only the tail of a copy's output is ever read: the byte count, or the end of an error. */
+const COPY_OUTPUT_TAIL = 4096
 
 /** Networks Docker creates itself; a container is on one of them only when it is on no user network. */
 const PREDEFINED_NETWORKS = new Set(['bridge', 'host', 'none'])
@@ -20,6 +27,8 @@ const IMAGE_CHECK_INTERVAL_MS = 10 * 60_000
 
 export const sandboxName = (threadId: string): string => `valet-sandbox-${threadId}`
 export const volumeName = (threadId: string): string => `valet-home-${threadId}`
+/** `key` is the short snapshot key; the full one is only stored on the project row. */
+export const snapshotVolumeName = (projectId: string, key: string): string => `valet-snap-${projectId}-${key}`
 
 export type SandboxSpec = {
   threadId: string
@@ -234,14 +243,19 @@ export class DockerClient {
     return list.length
   }
 
-  async volumeExists(name: string): Promise<boolean> {
+  /** The labels of an existing volume, or null when there is no such volume. */
+  async volumeLabels(name: string): Promise<Record<string, string> | null> {
     try {
-      await this.docker.getVolume(name).inspect()
-      return true
+      const info = await this.docker.getVolume(name).inspect()
+      return info.Labels ?? {}
     } catch (err) {
-      if (statusOf(err) === 404) return false
+      if (statusOf(err) === 404) return null
       throw err
     }
+  }
+
+  async volumeExists(name: string): Promise<boolean> {
+    return (await this.volumeLabels(name)) !== null
   }
 
   async ensureVolume(name: string, labels: Record<string, string>): Promise<void> {
@@ -254,6 +268,69 @@ export class DockerClient {
       await this.docker.getVolume(name).remove()
     } catch (err) {
       if (statusOf(err) !== 404) throw err
+    }
+  }
+
+  listSnapshotVolumes(): Promise<Docker.VolumeInspectInfo[]> {
+    return this.docker.listVolumes({ filters: { label: [`${LABEL_SNAPSHOT}=true`] } }).then((r) => r.Volumes ?? [])
+  }
+
+  /**
+   * Copies `from` into a new volume `to` and returns its size in bytes. The source is
+   * mounted read-only, so a live sandbox keeps its volume intact; the copy runs as root
+   * so file ownership survives. Removes `to` again if the copy fails or `signal` aborts.
+   */
+  async cloneVolume(from: string, to: string, labels: Record<string, string>, signal?: AbortSignal): Promise<number> {
+    await this.removeVolume(to)
+    await this.docker.createVolume({ Name: to, Labels: { ...labels, [LABEL_MANAGED]: 'true' } })
+    try {
+      return await this.runCopy(from, to, labels, signal)
+    } catch (err) {
+      await this.removeVolume(to).catch(() => undefined)
+      throw err
+    }
+  }
+
+  private async runCopy(from: string, to: string, labels: Record<string, string>, signal?: AbortSignal): Promise<number> {
+    signal?.throwIfAborted()
+    const container = await this.docker.createContainer({
+      Image: this.cfg.VALET_SANDBOX_IMAGE,
+      name: `valet-copy-${to}-${shortHex()}`,
+      User: '0:0',
+      Entrypoint: ['/bin/sh', '-c'],
+      // The env file holds the project's decrypted variables and is rewritten on every
+      // provision, so no copy of a home volume has any reason to carry it along.
+      Cmd: ['cp -a /valet-from/. /valet-to/ && rm -f /valet-to/.valet/env && du -sb /valet-to | cut -f1'],
+      // Tty keeps stdout unmultiplexed, so the byte count reads back without demuxing.
+      Tty: true,
+      Labels: { ...labels, [LABEL_HELPER]: 'true' },
+      HostConfig: {
+        Binds: [`${from}:/valet-from:ro`, `${to}:/valet-to`],
+        NetworkMode: 'none',
+        Memory: this.cfg.VALET_SANDBOX_MEMORY,
+        NanoCpus: Math.round(this.cfg.VALET_SANDBOX_CPUS * 1e9),
+        Init: true,
+        RestartPolicy: { Name: 'no' },
+        AutoRemove: false,
+      },
+    })
+    try {
+      // Attached before the start, and raw thanks to Tty: `logs()` would JSON-parse a bare number.
+      const stream = await container.attach({ stream: true, stdout: true, stderr: true })
+      const decoder = new StringDecoder('utf8')
+      let output = ''
+      stream.on('data', (chunk: Buffer) => {
+        output = (output + decoder.write(chunk)).slice(-COPY_OUTPUT_TAIL)
+      })
+      await container.start()
+      const { StatusCode } = await waitFor(container, signal)
+      const tail = output.trim()
+      if (StatusCode !== 0) throw new Error(`copying ${from} exited with ${StatusCode}: ${tail.slice(-500)}`)
+      const bytes = Number(tail.split(/\s+/).pop())
+      if (!Number.isInteger(bytes)) throw new Error(`copying ${from} reported no size: ${tail.slice(-500)}`)
+      return bytes
+    } finally {
+      await container.remove({ force: true }).catch(() => undefined)
     }
   }
 
@@ -364,4 +441,20 @@ export class DockerClient {
     if (this.imageChecker) clearInterval(this.imageChecker)
     this.imageChecker = null
   }
+}
+
+/**
+ * `container.wait()`, except that an abort rejects immediately. The caller force-removes
+ * the container on the way out, which is what stops the work.
+ */
+function waitFor(container: Docker.Container, signal?: AbortSignal): Promise<{ StatusCode: number }> {
+  const wait = container.wait() as Promise<{ StatusCode: number }>
+  if (!signal) return wait
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason as Error)
+    // An already-aborted signal never emits the event.
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+    void wait.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
 }

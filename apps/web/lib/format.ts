@@ -50,6 +50,18 @@ export function tokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`
 }
 
+export function bytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = n / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`
+}
+
 // CSI sequences (colors, cursor moves) and OSC sequences (titles, hyperlinks).
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g
 

@@ -47,6 +47,12 @@ const schema = z.object({
   VALET_SANDBOX_MEMORY: z.preprocess(emptyToUndefined, z.string().default('4g')).transform(parseSize),
   VALET_SANDBOX_CPUS: z.preprocess(emptyToUndefined, z.coerce.number().positive().default(2)),
   VALET_MAX_RUNNING_SANDBOXES: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).default(8)),
+  /** Clone a project's post-setup home volume and reuse it for new threads. */
+  VALET_SNAPSHOTS: z
+    .preprocess(emptyToUndefined, z.enum(['0', '1']).default('1'))
+    .transform((v) => v === '1'),
+  /** Total budget for snapshot volumes; least recently used ones are pruned past it. */
+  VALET_SNAPSHOT_MAX_GB: z.preprocess(emptyToUndefined, z.coerce.number().positive().default(20)),
   /** Falls back to /var/run/docker.sock when unset (dockerode honours DOCKER_HOST too). */
   DOCKER_HOST: z.preprocess(emptyToUndefined, z.string().optional()),
   DOCKER_SOCKET: z.preprocess(emptyToUndefined, z.string().default('/var/run/docker.sock')),

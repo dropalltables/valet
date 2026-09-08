@@ -12,6 +12,8 @@ import { isLocallyBuilt, reposVolumeName, soleNetworkName } from '../src/docker/
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
 import { parseGitHubUrl } from '../src/git/github.js'
 import { titleFromPrompt } from '../src/threads/mapper.js'
+import type { GitRunner } from '../src/git/changes.js'
+import { readSnapshotKey, snapshotKey, snapshotKeyPaths, type SnapshotEntry } from '../src/threads/sandbox-ops.js'
 
 test('cipher round trip and tamper detection', () => {
   const cipher = new Cipher(crypto.randomBytes(32))
@@ -145,4 +147,63 @@ test('cookie parsing survives malformed percent-encoding', () => {
   assert.deepEqual(parseCookie('a=1; valet_session=%E0%A4%A; b=%20x'), { a: '1', valet_session: '%E0%A4%A', b: ' x' })
   assert.deepEqual(parseCookie(undefined), {})
   assert.deepEqual(parseCookie('novalue; =x; k=v=w'), { k: 'v=w' })
+})
+
+test('snapshot key paths', () => {
+  const entries = ['src', 'requirements.txt', 'package.json', 'yarn.lock', 'requirements-dev.txt', 'Cargo.lock', 'lock.json']
+  assert.deepEqual(snapshotKeyPaths(entries), ['Cargo.lock', 'requirements-dev.txt', 'requirements.txt', 'yarn.lock'])
+  assert.deepEqual(snapshotKeyPaths([]), [])
+})
+
+test('snapshot key', () => {
+  const entries: SnapshotEntry[] = [
+    { path: '.valet/setup', oid: 'a'.repeat(40) },
+    { path: 'package-lock.json', oid: 'b'.repeat(40) },
+  ]
+  const key = snapshotKey('main', entries)
+  assert.match(key, /^[0-9a-f]{64}$/)
+  assert.equal(snapshotKey('main', entries), key)
+  assert.notEqual(snapshotKey('develop', entries), key)
+
+  const edited: SnapshotEntry[] = [{ ...entries[0]!, oid: 'c'.repeat(40) }, entries[1]!]
+  assert.notEqual(snapshotKey('main', edited), key)
+
+  // A file that is absent must not hash like one that is present.
+  const absent: SnapshotEntry[] = [entries[0]!, { path: 'package-lock.json', oid: null }]
+  assert.notEqual(snapshotKey('main', absent), key)
+
+  // Ids may not move between paths: each is hashed with the path it belongs to.
+  const swapped: SnapshotEntry[] = [
+    { path: '.valet/setup', oid: 'b'.repeat(40) },
+    { path: 'package-lock.json', oid: 'a'.repeat(40) },
+  ]
+  assert.notEqual(snapshotKey('main', swapped), key)
+
+  // Adding a lockfile changes the key even when nothing else moved.
+  assert.notEqual(snapshotKey('main', [...entries, { path: 'uv.lock', oid: 'd'.repeat(40) }]), key)
+})
+
+test('snapshot key of a ref reads blob ids for the setup script and lockfiles', async () => {
+  const setupOid = '1111111111111111111111111111111111111111'
+  const lockOid = '2222222222222222222222222222222222222222'
+  const calls: string[][] = []
+  const run: GitRunner = (argv) => {
+    calls.push(argv)
+    const stdout = argv.includes('--name-only')
+      ? 'README.md\npackage.json\npackage-lock.json\nsrc\nyarn.lock\n'
+      : [`100755 blob ${setupOid}\t.valet/setup`, `100644 blob ${lockOid}\tpackage-lock.json`, ''].join('\x00')
+    return Promise.resolve({ code: 0, signal: null, stdout, stderr: '', timedOut: false })
+  }
+
+  const key = await readSnapshotKey(run, 'FETCH_HEAD', 'main')
+  // yarn.lock is in the tree listing but absent from the ls-tree reply: it hashes as missing.
+  assert.deepEqual(calls[1], ['git', 'ls-tree', '-z', 'FETCH_HEAD', '--', '.valet/setup', 'package-lock.json', 'yarn.lock'])
+  assert.equal(
+    key,
+    snapshotKey('main', [
+      { path: '.valet/setup', oid: setupOid },
+      { path: 'package-lock.json', oid: lockOid },
+      { path: 'yarn.lock', oid: null },
+    ]),
+  )
 })

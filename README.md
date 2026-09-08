@@ -111,6 +111,12 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
 - **Pause and wake.** After `VALET_IDLE_PAUSE_MINUTES` without activity the container is
   stopped. Files, installed packages, and the agent's session survive. The next message
   starts it again and resumes the same agent session.
+- **Warm starts.** After `.valet/setup` succeeds, core snapshots that thread's home
+  volume for the project. A new thread starts from the snapshot when `.valet/setup`, the
+  lockfiles, and the base branch still hash to the same key: it fetches the base branch,
+  branches from it, runs `.valet/resume`, and skips setup. One snapshot per project; it
+  is rebuilt when the key changes and dropped after 7 days unused or when the total
+  passes `VALET_SNAPSHOT_MAX_GB`. Set `VALET_SNAPSHOTS=0` to turn it off.
 - **Transcript.** Core normalizes Claude Code's `stream-json` and Codex's app-server
   protocol into one event log stored in Postgres and streamed to the browser over
   WebSocket, so reloading or reconnecting never loses output.
@@ -215,6 +221,8 @@ valet portal 8000            # the portal URL for any port
 | `VALET_SANDBOX_MEMORY` | `4g` | Memory limit per sandbox |
 | `VALET_SANDBOX_CPUS` | `2` | CPU limit per sandbox |
 | `VALET_MAX_RUNNING_SANDBOXES` | `8` | Running containers before new threads queue |
+| `VALET_SNAPSHOTS` | `1` | Reuse a per-project snapshot of `.valet/setup` for new threads |
+| `VALET_SNAPSHOT_MAX_GB` | `20` | Snapshot storage budget; least recently used snapshots go first |
 
 ## Development
 
