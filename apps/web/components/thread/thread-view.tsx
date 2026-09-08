@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { LIVE_STATUSES, type Project, type ThreadListItem } from '@valet/shared'
 import { api, ApiError, errorMessage } from '@/lib/api'
-import { useThreadStream, type StreamState } from '@/lib/stream'
+import { serviceRowCount, useThreadStream, type StreamState } from '@/lib/stream'
 import { Button } from '@/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useAppData } from '@/components/app/data-provider'
@@ -73,7 +73,7 @@ function ThreadBody({
         costUsd={stream.transcript.totalCostUsd || thread.costUsd}
         usage={LIVE_STATUSES.includes(thread.status) ? stream.usage : null}
         actions={actions}
-        serviceCount={stream.services.length}
+        serviceCount={serviceRowCount(stream.services, stream.portals)}
         onOpenServices={() => setTab('services')}
       />
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">

@@ -1,6 +1,7 @@
 'use client'
 
 import type { Project } from '@valet/shared'
+import { cn } from '@/lib/utils'
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const NEW = '__new__'
@@ -37,13 +38,13 @@ export function ProjectPicker({
         onChange(v)
       }}
     >
-      <SelectTrigger size={size} aria-label="Project" className={triggerClassName}>
+      <SelectTrigger size={size} aria-label="Project" className={cn('min-w-0 max-w-[60%]', triggerClassName)}>
         <SelectValue placeholder="Project" />
       </SelectTrigger>
       <SelectContent position="popper" align="start" sideOffset={6}>
         {projects.map((p) => (
           <SelectItem key={p.id} value={p.id}>
-            {p.name}
+            <span className="truncate">{p.name}</span>
           </SelectItem>
         ))}
         {projects.length > 0 && <SelectSeparator />}

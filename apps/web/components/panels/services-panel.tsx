@@ -235,7 +235,9 @@ function ServiceRow({
           className={cn('flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left', target && 'hover:text-foreground')}
         >
           <span className="min-w-0 truncate font-medium">{service.name}</span>
-          <span className="shrink-0 text-muted-foreground">{stateLabel(service)}</span>
+          <span className={cn('shrink-0', service.state === 'failed' ? 'text-destructive' : 'text-muted-foreground')}>
+            {stateLabel(service)}
+          </span>
           {service.port !== null && <span className="shrink-0 text-muted-foreground tabular-nums">{service.port}</span>}
         </Name>
         {alive ? (

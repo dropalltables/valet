@@ -97,7 +97,7 @@ function QuestionField({
           })}
         </div>
       ) : readOnly ? (
-        <p className="whitespace-pre-wrap">{value.join('\n')}</p>
+        <p className="whitespace-pre-wrap break-words">{value.join('\n')}</p>
       ) : (
         <Textarea value={value[0] ?? ''} onChange={(e) => onChange([e.target.value])} rows={3} />
       )}

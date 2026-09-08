@@ -38,7 +38,7 @@ export default function ProjectsPage() {
             <TableBody>
               {projects.map((p) => (
                 <TableRow key={p.id}>
-                  <TableCell>
+                  <TableCell className="max-w-xs truncate">
                     <Link href={`/projects/${p.id}`} className="font-medium hover:underline">
                       {p.name}
                     </Link>

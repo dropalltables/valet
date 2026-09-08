@@ -29,7 +29,7 @@ function UserPrompt({ prompt }: { prompt: Turn['prompt'] }) {
   if (!prompt.text && prompt.images.length === 0) return null
   return (
     <div className="flex flex-col gap-2 rounded-md bg-secondary px-4 py-3 text-sm">
-      {prompt.text && <p className="whitespace-pre-wrap">{prompt.text}</p>}
+      {prompt.text && <p className="whitespace-pre-wrap break-words">{prompt.text}</p>}
       {prompt.images.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {prompt.images.map((img, i) => (

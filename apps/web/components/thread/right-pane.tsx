@@ -4,6 +4,7 @@ import dynamic from 'next/dynamic'
 import { useState } from 'react'
 import { LIVE_STATUSES, type Portal, type Project, type Service, type ThreadListItem } from '@valet/shared'
 import { api } from '@/lib/api'
+import { serviceRowCount } from '@/lib/stream'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ChangesPanel } from '@/components/panels/changes-panel'
@@ -37,8 +38,7 @@ export function RightPane({
   // visit and then stay mounted (hidden) to keep their sessions across switches.
   const [visited, setVisited] = useState<ReadonlySet<RightPaneTab>>(() => new Set([tab]))
   const live = LIVE_STATUSES.includes(thread.status)
-  // Rows in the Services tab: managed services plus listening ports no service owns.
-  const rows = services.length + portals.filter((p) => !services.some((s) => s.port === p.port)).length
+  const rows = serviceRowCount(services, portals)
 
   function select(next: string): void {
     const t = next as RightPaneTab
