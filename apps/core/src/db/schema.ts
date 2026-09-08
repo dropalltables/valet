@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
 import type {
   AgentKind,
+  CredentialKind,
   DiffStats,
   McpServerScope,
   McpServerType,
@@ -10,7 +11,7 @@ import type {
   NotificationEvent,
   PermissionPolicy,
   ProjectSource,
-  PullRequestState,
+  PullRequest,
   Service,
   Settings,
   ThreadStatus,
@@ -32,6 +33,9 @@ export const projects = pgTable('projects', {
   snapshotSizeBytes: bigint('snapshot_size_bytes', { mode: 'number' }),
   snapshotCreatedAt: timestamp('snapshot_created_at', { withTimezone: true }),
   snapshotLastUsedAt: timestamp('snapshot_last_used_at', { withTimezone: true }),
+  autoCreatePr: boolean('auto_create_pr').notNull().default(false),
+  archiveOnMerge: boolean('archive_on_merge').notNull().default(true),
+  autoFixCi: boolean('auto_fix_ci').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -82,7 +86,8 @@ export const mcpServerProjects = pgTable(
   (t) => [primaryKey({ columns: [t.serverId, t.projectId] })],
 )
 
-export type PrRow = { url: string; number: number; state: PullRequestState }
+/** The pull request as the API reports it, plus the head commit auto-fix last covered. */
+export type PrRow = PullRequest & { ciFixSha: string | null }
 /** A listening port as last reported by the sandbox; the URL is derived at read time. */
 export type StoredPortal = { port: number; name: string | null; process: string | null }
 /**
@@ -153,7 +158,7 @@ export const threadEvents = pgTable(
 )
 
 export const credentials = pgTable('credentials', {
-  kind: text('kind').$type<'claude' | 'codex' | 'github'>().primaryKey(),
+  kind: text('kind').$type<CredentialKind>().primaryKey(),
   payloadEnc: text('payload_enc').notNull(),
   label: text('label'),
   method: text('method').$type<'oauth' | 'api-key'>(),

@@ -22,6 +22,9 @@ export function toProject(row: ProjectRow): Project {
     defaultBranch: row.defaultBranch,
     hasSetupScript: row.hasSetupScript,
     snapshot: toSnapshot(row),
+    autoCreatePr: row.autoCreatePr,
+    archiveOnMerge: row.archiveOnMerge,
+    autoFixCi: row.autoFixCi,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }

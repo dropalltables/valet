@@ -47,9 +47,10 @@ async function main(): Promise<void> {
   const settings = new SettingsService(db, cfg, cipher)
   const snapshots = new SnapshotStore(db, cfg, docker, events)
   const projects = new ProjectService(db, cipher, cfg, events, snapshots, async (repoUrl) => {
-    const token = await credentials.githubToken()
     const ref = parseGitHubUrl(repoUrl)
-    if (!token || !ref) return null
+    if (!ref) return null
+    const token = await credentials.githubTokenFor(ref)
+    if (!token) return null
     return new GitHub(token).defaultBranch(ref).catch(() => null)
   })
   const portalUrls = new PortalUrls(cfg)
@@ -67,7 +68,7 @@ async function main(): Promise<void> {
   const notifications = new NotificationService({ db, cfg, cipher, events, settings })
   notifications.watch()
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, snapshots, threads, shares, portals, usage, mcp })
+  const app = createApp({ version: pkg.version, cfg, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, snapshots, threads, shares, portals, usage, mcp })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
     log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server

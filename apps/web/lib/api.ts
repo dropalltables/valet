@@ -14,6 +14,7 @@ import type {
   EventsResponse,
   FileResponse,
   FilesResponse,
+  GitHubAppResponse,
   GitHubBranchesResponse,
   GitHubReposResponse,
   Health,
@@ -133,6 +134,7 @@ export const api = {
     githubRepos: (query: string) => request<GitHubReposResponse>(`/api/credentials/github/repos${q({ query })}`),
     githubBranches: (owner: string, repo: string) =>
       request<GitHubBranchesResponse>(`/api/credentials/github/repos/${owner}/${repo}/branches`),
+    githubApp: () => request<GitHubAppResponse>('/api/credentials/github/app'),
   },
   agents: {
     list: () => request<AgentsResponse>('/api/agents'),

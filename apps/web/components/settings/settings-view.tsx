@@ -22,7 +22,7 @@ import {
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
 import { bytes, relativeTime } from '@/lib/format'
-import { useAgents, useCredentials, useNotifications, useSettings, useSnapshots } from '@/lib/hooks'
+import { useAgents, useCredentials, useGitHubApp, useNotifications, useSettings, useSnapshots } from '@/lib/hooks'
 import { disablePush, enablePush, pushStatus, type PushState, type PushStatus } from '@/lib/push'
 import {
   AlertDialog,
@@ -39,8 +39,10 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
 import { useHealth } from '@/components/app/health-gate'
 import { McpServers } from '@/components/settings/mcp-servers'
 
@@ -109,6 +111,7 @@ function Credentials() {
           fields={[{ key: 'token', label: 'Personal access token', placeholder: 'ghp_... or github_pat_...' }]}
           onChange={() => void mutate()}
         />
+        <GitHubAppRow status={byKind.get('github-app')} onChange={() => void mutate()} />
       </div>
     </Section>
   )
@@ -204,6 +207,140 @@ function CredentialRow({
           </Button>
         </form>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The optional GitHub App. When one is stored, clone, push, and pull requests use
+ * its installation tokens, and the webhook drives auto-fix CI and `@valet` replies.
+ */
+function GitHubAppRow({ status, onChange }: { status: CredentialStatus | undefined; onChange: () => void }) {
+  const { data, mutate } = useGitHubApp()
+  const [appId, setAppId] = useState('')
+  const [privateKey, setPrivateKey] = useState('')
+  const [webhookSecret, setWebhookSecret] = useState('')
+  const [busy, setBusy] = useState(false)
+  const configured = status?.configured ?? false
+  const complete = appId.trim() !== '' && privateKey.trim() !== '' && webhookSecret.trim() !== ''
+
+  async function save(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!complete) return
+    setBusy(true)
+    try {
+      await api.credentials.put('github-app', {
+        appId: Number(appId),
+        privateKey: privateKey.trim(),
+        webhookSecret: webhookSecret.trim(),
+      })
+      setAppId('')
+      setPrivateKey('')
+      setWebhookSecret('')
+      onChange()
+      await mutate()
+      toast.success('GitHub App saved')
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(): Promise<void> {
+    setBusy(true)
+    try {
+      await api.credentials.remove('github-app')
+      onChange()
+      await mutate()
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <h3 className="font-medium">GitHub App</h3>
+        {configured && status ? (
+          <>
+            <span className="font-mono text-xs">{status.label}</span>
+            {status.updatedAt && <span className="text-xs text-muted-foreground">{relativeTime(status.updatedAt)}</span>}
+            <Button size="xs" variant="ghost" disabled={busy} onClick={() => void remove()}>
+              Remove
+            </Button>
+          </>
+        ) : (
+          <span className="text-xs text-muted-foreground">Not configured</span>
+        )}
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">Webhook URL</dt>
+        <dd className="font-mono text-xs break-all">{data ? data.webhookUrl : <Skeleton className="h-4 w-80 max-w-full" />}</dd>
+        {configured && (
+          <>
+            <dt className="text-muted-foreground">Installations</dt>
+            <dd className="text-xs">
+              {!data ? (
+                <Skeleton className="h-4 w-48 max-w-full" />
+              ) : data.error ? (
+                <span role="alert" className="text-destructive">
+                  {data.error}
+                </span>
+              ) : data.installations.length === 0 ? (
+                'None'
+              ) : (
+                data.installations
+                  .map((i) => `${i.account} (${i.repositorySelection === 'all' ? 'all repositories' : 'selected repositories'})`)
+                  .join(', ')
+              )}
+            </dd>
+          </>
+        )}
+      </dl>
+      <form onSubmit={save} className="flex flex-col gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="github-app-id">App ID</Label>
+            <Input
+              id="github-app-id"
+              inputMode="numeric"
+              value={appId}
+              onChange={(e) => setAppId(e.target.value.replace(/\D/g, ''))}
+              className="font-mono tabular-nums"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="github-app-secret">Webhook secret</Label>
+            <Input
+              id="github-app-secret"
+              type="password"
+              autoComplete="off"
+              value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)}
+              className="font-mono"
+            />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="github-app-key">Private key</Label>
+          <Textarea
+            id="github-app-key"
+            rows={4}
+            value={privateKey}
+            onChange={(e) => setPrivateKey(e.target.value)}
+            placeholder="-----BEGIN RSA PRIVATE KEY-----"
+            className="font-mono text-xs"
+          />
+        </div>
+        <div>
+          <Button type="submit" size="default" disabled={busy || !complete}>
+            Save
+          </Button>
+        </div>
+      </form>
     </div>
   )
 }

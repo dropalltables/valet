@@ -4,6 +4,7 @@ import { z } from 'zod'
 import {
   AGENT_LABELS,
   DEFAULT_MODEL,
+  GITHUB_WEBHOOK_PATH,
   USAGE_RANGES,
   createServiceRequestSchema,
   serviceNameSchema,
@@ -12,6 +13,7 @@ import {
   type AgentsResponse,
   type CredentialKind,
   type EventsResponse,
+  type GitHubAppResponse,
   type Health,
   type McpServersResponse,
   type PortalsResponse,
@@ -31,7 +33,9 @@ import type { Db } from '../db/index.js'
 import type { DockerClient } from '../docker/client.js'
 import { HttpError, badRequest, notFound, statusOf } from '../errors.js'
 import type { EventLog } from '../events/log.js'
-import { GitHub } from '../git/github.js'
+import type { Config } from '../config.js'
+import { GitHub, GitHubApp } from '../git/github.js'
+import { parseWebhookEvent, verifyWebhookSignature, type WebhookIntent } from '../git/webhook.js'
 import { errorMessage, logger } from '../logger.js'
 import type { McpServerStore } from '../mcp/store.js'
 import type { ModelCatalog } from '../models/catalog.js'
@@ -43,7 +47,7 @@ import type { SnapshotStore } from '../projects/snapshots.js'
 import type { SettingsService } from '../settings.js'
 import { updateSettingsSchema } from '../settings.js'
 import { toSharedThread } from '../threads/mapper.js'
-import type { ThreadService } from '../threads/service.js'
+import type { ThreadService, WebhookOutcome } from '../threads/service.js'
 import type { ThreadShares } from '../threads/share.js'
 import type { UsageService } from '../usage/service.js'
 import { jsonBody, queryParams } from './validate.js'
@@ -52,6 +56,7 @@ const log = logger('http')
 
 export type AppDeps = {
   version: string
+  cfg: Config
   db: Db
   auth: Auth
   docker: DockerClient
@@ -72,7 +77,7 @@ export type AppDeps = {
 
 const imageSchema = z.object({ mediaType: z.string(), dataUrl: z.string() })
 const agentKind = z.enum(['claude', 'codex'])
-const credentialKind = z.enum(['claude', 'codex', 'github'])
+const credentialKind = z.enum(['claude', 'codex', 'github', 'github-app'])
 
 const createProjectSchema = z.discriminatedUnion('source', [
   z.object({
@@ -83,7 +88,13 @@ const createProjectSchema = z.discriminatedUnion('source', [
   }),
   z.object({ source: z.literal('blank'), name: z.string().min(1) }),
 ])
-const updateProjectSchema = z.object({ name: z.string().optional(), defaultBranch: z.string().optional() })
+const updateProjectSchema = z.object({
+  name: z.string().optional(),
+  defaultBranch: z.string().optional(),
+  autoCreatePr: z.boolean().optional(),
+  archiveOnMerge: z.boolean().optional(),
+  autoFixCi: z.boolean().optional(),
+})
 const putEnvSchema = z.object({
   vars: z.array(z.object({ name: z.string(), value: z.string().optional(), kind: z.enum(['plain', 'secret']) })),
 })
@@ -96,7 +107,7 @@ const createThreadSchema = z.object({
   permissions: z.enum(['auto', 'ask']).optional(),
   baseBranch: z.string().optional(),
 })
-const updateThreadSchema = z.object({ title: z.string().optional() })
+const updateThreadSchema = z.object({ title: z.string().optional(), autoFixCi: z.boolean().optional() })
 const sendMessageSchema = z.object({
   text: z.string(),
   images: z.array(imageSchema).optional(),
@@ -105,7 +116,6 @@ const sendMessageSchema = z.object({
 const permissionSchema = z.object({ decision: z.enum(['allow', 'deny']) })
 const answersSchema = z.object({ answers: z.record(z.string(), z.array(z.string())) })
 const prSchema = z.object({ title: z.string().optional(), body: z.string().optional(), draft: z.boolean().optional() })
-const putCredentialSchema = z.object({ token: z.string().optional(), apiKey: z.string().optional() })
 const mcpValuesSchema = z.array(z.object({ name: z.string(), value: z.string().optional() }))
 const mcpServerSchema = z.intersection(
   z.object({
@@ -119,6 +129,13 @@ const mcpServerSchema = z.intersection(
     z.object({ type: z.literal('stdio'), command: z.string().min(1), args: z.array(z.string()).optional(), env: mcpValuesSchema }),
   ]),
 )
+const putCredentialSchema = z.object({
+  token: z.string().optional(),
+  apiKey: z.string().optional(),
+  appId: z.number().int().positive().optional(),
+  privateKey: z.string().optional(),
+  webhookSecret: z.string().optional(),
+})
 const shareSchema = z.object({ hours: z.union([z.literal(1), z.literal(3), z.literal(24), z.literal(168)]) })
 
 function parsePort(raw: string): number {
@@ -161,6 +178,37 @@ export function createApp(deps: AppDeps): Hono {
   app.notFound((c) => c.json({ error: 'not found' }, 404))
   // Portal traffic authenticates with its own cookie, so it is mounted ahead of the session check.
   app.route('/', deps.portals.routes())
+
+  // GitHub authenticates itself by signing the body, so this one is mounted ahead of it too.
+  app.post(GITHUB_WEBHOOK_PATH, async (c) => {
+    const githubApp = await deps.credentials.githubApp()
+    if (!githubApp) throw new HttpError(503, 'No GitHub App is configured')
+    const raw = await c.req.text()
+    if (!verifyWebhookSignature(githubApp.webhookSecret, raw, c.req.header('x-hub-signature-256'))) {
+      throw new HttpError(401, 'signature mismatch')
+    }
+    const event = c.req.header('x-github-event') ?? ''
+    const delivery = c.req.header('x-github-delivery')
+    let payload: unknown
+    try {
+      payload = JSON.parse(raw)
+    } catch {
+      throw badRequest('body is not JSON')
+    }
+    let intent: WebhookIntent | null
+    try {
+      intent = parseWebhookEvent(event, payload)
+    } catch (err) {
+      // A signed delivery whose shape Valet does not know is GitHub schema drift,
+      // not a server fault.
+      log.warn('unexpected github webhook payload', { event, delivery, message: errorMessage(err) })
+      throw badRequest(`unexpected ${event} payload`)
+    }
+    const outcome: WebhookOutcome = intent ? await deps.threads.applyWebhook(intent) : 'ignored'
+    log.info('github webhook', { event, delivery, kind: intent?.kind ?? null, outcome })
+    return c.json({ outcome }, 202)
+  })
+
   app.use('/api/*', deps.auth.middleware())
   app.route('/', deps.auth.routes())
 
@@ -262,9 +310,24 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ repos: await new GitHub(token).listRepos(c.req.query('query')) })
   })
   app.get('/api/credentials/github/repos/:owner/:repo/branches', async (c) => {
-    const token = await deps.credentials.githubToken()
+    const ref = { owner: c.req.param('owner'), repo: c.req.param('repo') }
+    const token = await deps.credentials.githubTokenFor(ref)
     if (!token) throw badRequest('No GitHub credential is configured')
-    return c.json(await new GitHub(token).listBranches({ owner: c.req.param('owner'), repo: c.req.param('repo') }))
+    return c.json(await new GitHub(token).listBranches(ref))
+  })
+
+  app.get('/api/credentials/github/app', async (c) => {
+    const githubApp = await deps.credentials.githubApp()
+    const webhookUrl = `${deps.cfg.VALET_BASE_URL.replace(/\/$/, '')}${GITHUB_WEBHOOK_PATH}`
+    if (!githubApp) {
+      const body: GitHubAppResponse = { webhookUrl, installations: [], error: null }
+      return c.json(body)
+    }
+    const body: GitHubAppResponse = await new GitHubApp(githubApp)
+      .installations()
+      .then((installations) => ({ webhookUrl, installations, error: null }))
+      .catch((err: unknown) => ({ webhookUrl, installations: [], error: errorMessage(err) }))
+    return c.json(body)
   })
 
   app.put('/api/credentials/:kind', jsonBody(putCredentialSchema), async (c) => {
@@ -294,12 +357,28 @@ export function createApp(deps: AppDeps): Hono {
         const login = await new GitHub(token).login()
         return c.json(await deps.credentials.put('github', { token }, `${login} (${maskToken(token)})`, null))
       }
+      case 'github-app': {
+        const { appId } = body
+        const privateKey = body.privateKey?.trim()
+        const webhookSecret = body.webhookSecret?.trim()
+        if (appId === undefined) throw badRequest('appId is required')
+        if (!privateKey) throw badRequest('privateKey is required')
+        if (!webhookSecret) throw badRequest('webhookSecret is required')
+        if (!privateKey.includes('PRIVATE KEY')) throw badRequest('privateKey must be the PEM file GitHub generated')
+        // A key that cannot sign fails locally, without an HTTP status of its own.
+        const installations = await new GitHubApp({ appId, privateKey }).installations().catch((err: unknown) => {
+          if (err instanceof HttpError || statusOf(err)) throw err
+          throw badRequest(`GitHub App credentials were rejected: ${errorMessage(err)}`)
+        })
+        const label = installations[0] ? `App ${appId} (${installations[0].account})` : `App ${appId}`
+        return c.json(await deps.credentials.put('github-app', { appId, privateKey, webhookSecret }, label, null))
+      }
     }
   })
   app.delete('/api/credentials/:kind', async (c) => {
     const kind = parseKind(c.req.param('kind'))
     await deps.credentials.remove(kind)
-    if (kind !== 'github') await deps.catalog.clear(kind)
+    if (kind === 'claude' || kind === 'codex') await deps.catalog.clear(kind)
     return c.body(null, 204)
   })
 
@@ -375,7 +454,12 @@ export function createApp(deps: AppDeps): Hono {
   app.get('/api/threads/:id', async (c) => c.json(await deps.threads.get(c.req.param('id'))))
   app.patch('/api/threads/:id', jsonBody(updateThreadSchema), async (c) => {
     const body = c.req.valid('json')
-    return c.json(await deps.threads.update(c.req.param('id'), body.title !== undefined ? { title: body.title } : {}))
+    return c.json(
+      await deps.threads.update(c.req.param('id'), {
+        ...(body.title !== undefined ? { title: body.title } : {}),
+        ...(body.autoFixCi !== undefined ? { autoFixCi: body.autoFixCi } : {}),
+      }),
+    )
   })
   app.delete('/api/threads/:id', async (c) => {
     await deps.threads.delete(c.req.param('id'))

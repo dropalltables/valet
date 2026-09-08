@@ -1,5 +1,6 @@
+import { createAppAuth } from '@octokit/auth-app'
 import { Octokit } from '@octokit/rest'
-import type { GitHubBranchesResponse, GitHubRepo } from '@valet/shared'
+import type { GitHubAppInstallation, GitHubBranchesResponse, GitHubRepo } from '@valet/shared'
 import { HttpError, badRequest, statusOf } from '../errors.js'
 import { errorMessage } from '../logger.js'
 
@@ -111,6 +112,59 @@ export class GitHub {
       const res = await this.octokit.pulls.get({ owner: ref.owner, repo: ref.repo, pull_number: number })
       if (res.data.merged) return 'merged'
       return res.data.state === 'closed' ? 'closed' : 'open'
+    } catch (err) {
+      translate(err)
+    }
+  }
+}
+
+export type GitHubAppCredentials = { appId: number; privateKey: string }
+
+/**
+ * Authenticated as the GitHub App itself (a signed JWT), which is what reading
+ * installations and minting installation tokens requires. Installation tokens last
+ * an hour; `CredentialStore` caches them per repository.
+ */
+export class GitHubApp {
+  private readonly octokit: Octokit
+
+  constructor(creds: GitHubAppCredentials) {
+    this.octokit = new Octokit({ authStrategy: createAppAuth, auth: creds, userAgent: 'valet' })
+  }
+
+  async installations(): Promise<GitHubAppInstallation[]> {
+    try {
+      const res = await this.octokit.apps.listInstallations({ per_page: 100 })
+      return res.data.map((i) => ({
+        id: i.id,
+        account: i.account?.login ?? '',
+        repositorySelection: i.repository_selection,
+      }))
+    } catch (err) {
+      translate(err)
+    }
+  }
+
+  /**
+   * A token scoped to one repository and the permissions Valet uses, or null when the
+   * App is not installed on that repository.
+   */
+  async installationToken(ref: RepoRef): Promise<{ token: string; expiresAt: string } | null> {
+    let installationId: number
+    try {
+      const res = await this.octokit.apps.getRepoInstallation({ owner: ref.owner, repo: ref.repo })
+      installationId = res.data.id
+    } catch (err) {
+      if (statusOf(err) === 404) return null
+      translate(err)
+    }
+    try {
+      const res = await this.octokit.apps.createInstallationAccessToken({
+        installation_id: installationId,
+        repositories: [ref.repo],
+        permissions: { contents: 'write', pull_requests: 'write', metadata: 'read' },
+      })
+      return { token: res.data.token, expiresAt: res.data.expires_at }
     } catch (err) {
       translate(err)
     }

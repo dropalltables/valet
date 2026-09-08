@@ -26,7 +26,13 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 export type CreateProjectInput =
   | { source: 'github'; repoUrl: string; defaultBranch?: string | undefined; name?: string | undefined }
   | { source: 'blank'; name: string }
-export type UpdateProjectInput = { name?: string | undefined; defaultBranch?: string | undefined }
+export type UpdateProjectInput = {
+  name?: string | undefined
+  defaultBranch?: string | undefined
+  autoCreatePr?: boolean | undefined
+  archiveOnMerge?: boolean | undefined
+  autoFixCi?: boolean | undefined
+}
 export type PutProjectEnvInput = { vars: Array<{ name: string; value?: string | undefined; kind: 'plain' | 'secret' }> }
 
 function maskValue(value: string): string {
@@ -125,6 +131,9 @@ export class ProjectService {
       if (!patch.defaultBranch.trim()) throw badRequest('defaultBranch must not be empty')
       set.defaultBranch = patch.defaultBranch.trim()
     }
+    if (patch.autoCreatePr !== undefined) set.autoCreatePr = patch.autoCreatePr
+    if (patch.archiveOnMerge !== undefined) set.archiveOnMerge = patch.archiveOnMerge
+    if (patch.autoFixCi !== undefined) set.autoFixCi = patch.autoFixCi
     const [row] = await this.db.update(projects).set(set).where(eq(projects.id, id)).returning()
     if (!row) throw notFound('project')
     const project = toProject(row)

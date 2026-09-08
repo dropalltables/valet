@@ -71,6 +71,13 @@
       "when": 1788850982768,
       "tag": "0009_thread_share",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788851122595,
+      "tag": "0010_github_app",
+      "breakpoints": true
     }
   ]
 }

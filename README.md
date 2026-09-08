@@ -12,6 +12,7 @@ sandbox, and opening pull requests.
 - A Claude subscription (Pro, Max, Team, or Enterprise) or an Anthropic API key, for Claude Code.
 - A ChatGPT subscription or an OpenAI API key, for Codex.
 - A GitHub personal access token, for private repositories and pull requests.
+- Optionally a GitHub App, for installation tokens and pull request webhooks.
 
 ## Install
 
@@ -31,6 +32,13 @@ Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup unde
    yours and stays encrypted in Valet's database.
 2. **Codex**: click *Sign in with ChatGPT* (device code flow) or paste an OpenAI API key.
 3. **GitHub**: paste a personal access token with `repo` scope.
+4. **GitHub App** (optional): paste the App ID, private key, and webhook secret of a
+   GitHub App you own. Clone, push, and pull requests then use its installation tokens
+   instead of the token, and its webhook drives the pull request features below. Set the
+   App's webhook URL to the one Settings shows (`<VALET_BASE_URL>/api/webhooks/github`),
+   give it Contents and Pull requests read and write, Checks read, and Actions read, and
+   subscribe it to `check_run`, `check_suite`, `workflow_run`, `pull_request`,
+   `issue_comment`, and `pull_request_review_comment`.
 
 Saving a Claude Code or Codex credential reads that agent's model list from its CLI
 (in a short-lived sandbox container); *Refresh* under the credential reads it again.
@@ -134,6 +142,13 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   is on in Settings.
 - **Git.** GitHub credentials never sit in the container. Pushes and pull requests
   run through core with a short-lived credential helper.
+- **Pull requests.** With a GitHub App configured, a failed check on a thread's pull
+  request messages the thread to fix it and push (once per commit, five per pull
+  request, switchable per thread in its header); a comment from a repository
+  collaborator mentioning `@valet` is sent to the thread; closing, reopening, or
+  merging updates the thread's pull request state. A project chooses whether a turn
+  that ends with commits opens a pull request on its own, whether merging archives the
+  thread, and the default for the thread switch.
 - **Desktop and terminal.** Every sandbox runs a VNC desktop (Xfce, Chromium) and a
   tmux session for the Terminal tab (the user's own shell, separate from the agent);
   both are relayed through core, so no extra ports are exposed.

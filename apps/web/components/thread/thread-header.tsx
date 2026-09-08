@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState, type KeyboardEvent } from 'react'
-import { AGENT_LABELS, type Project, type ThreadListItem } from '@valet/shared'
+import { AGENT_LABELS, CI_FIX_MAX_ATTEMPTS, type Project, type PullRequest, type ThreadListItem } from '@valet/shared'
 import { MoreHorizontalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
@@ -21,6 +21,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { StatusWord } from '@/components/app/status'
 import { useAppData } from '@/components/app/data-provider'
 import { SharePopover } from '@/components/thread/share-popover'
@@ -74,11 +76,14 @@ export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, 
         <span className="flex-1" />
         {/* Stop lives in the composer; Push and Create PR live in the Changes tab. */}
         {thread.pr && (
-          <Button asChild size="sm" variant="secondary">
-            <a href={thread.pr.url} target="_blank" rel="noreferrer">
-              {PR_STATE[thread.pr.state]} #{thread.pr.number}
-            </a>
-          </Button>
+          <>
+            <AutoFixCi threadId={thread.id} pr={thread.pr} />
+            <Button asChild size="sm" variant="secondary">
+              <a href={thread.pr.url} target="_blank" rel="noreferrer">
+                {PR_STATE[thread.pr.state]} #{thread.pr.number}
+              </a>
+            </Button>
+          </>
         )}
         <SharePopover threadId={thread.id} />
         <DropdownMenu>
@@ -153,6 +158,38 @@ export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, 
         </AlertDialogContent>
       </AlertDialog>
     </header>
+  )
+}
+
+/** Whether GitHub check failures on the pull request come back to the thread as a message. */
+function AutoFixCi({ threadId, pr }: { threadId: string; pr: PullRequest }) {
+  const { upsertThread } = useAppData()
+  const [busy, setBusy] = useState(false)
+  const id = `auto-fix-ci-${threadId}`
+
+  async function toggle(checked: boolean): Promise<void> {
+    setBusy(true)
+    try {
+      upsertThread(await api.threads.update(threadId, { autoFixCi: checked }))
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <span className="flex items-center gap-1.5">
+      <Switch id={id} size="sm" checked={pr.autoFixCi} disabled={busy} onCheckedChange={(c) => void toggle(c)} />
+      <Label htmlFor={id} className="text-xs font-normal text-muted-foreground">
+        Auto-fix CI
+        {pr.ciFixAttempts > 0 && (
+          <span className="tabular-nums">
+            {pr.ciFixAttempts}/{CI_FIX_MAX_ATTEMPTS}
+          </span>
+        )}
+      </Label>
+    </span>
   )
 }
 
