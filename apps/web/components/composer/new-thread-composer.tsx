@@ -128,8 +128,8 @@ function Composer() {
       <PromptInput onSubmit={submit} accept="image/*" multiple className="flex flex-col">
         <AttachmentStrip />
         <ComposerTextarea disabled={busy} canSubmit={canSubmit} />
-        <PromptInputFooter className="flex-wrap gap-2">
-          <PromptInputTools className="flex-wrap gap-2">
+        <PromptInputFooter className="flex-nowrap items-end gap-2">
+          <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-2">
             <ProjectPicker
               projects={projects}
               value={projectId}
@@ -220,7 +220,7 @@ function Composer() {
             </PromptInputSelect>
             <AttachButton />
           </PromptInputTools>
-          <Button type="submit" size="sm" disabled={!canSubmit}>
+          <Button type="submit" size="sm" className="shrink-0" disabled={!canSubmit}>
             Start
             <kbd className="ml-1 font-sans text-xs text-primary-foreground/70">{modKey}+Enter</kbd>
           </Button>
