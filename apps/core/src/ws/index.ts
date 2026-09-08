@@ -241,6 +241,11 @@ async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: numbe
     send({ t: 'services', services })
   }
   send({ t: 'live' })
+  if (visibility === 'owner') {
+    // A sample takes about a second on the daemon, so it follows the live frame; without
+    // it the header would be missing its memory and CPU until the next 10 s tick.
+    void deps.threads.sampleUsage(id).catch((err: unknown) => log.debug('usage sample failed', { id, message: errorMessage(err) }))
+  }
 }
 
 async function serveRelay(ws: WebSocket, _deps: WsDeps, id: string, open: () => Promise<WebSocket>): Promise<void> {

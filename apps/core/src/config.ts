@@ -46,6 +46,8 @@ const schema = z.object({
   VALET_IDLE_PAUSE_MINUTES: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).default(10)),
   VALET_SANDBOX_MEMORY: z.preprocess(emptyToUndefined, z.string().default('4g')).transform(parseSize),
   VALET_SANDBOX_CPUS: z.preprocess(emptyToUndefined, z.coerce.number().positive().default(2)),
+  /** Process limit per sandbox; stops a fork bomb from reaching the host's pid table. */
+  VALET_SANDBOX_PIDS: z.preprocess(emptyToUndefined, z.coerce.number().int().positive().default(2048)),
   VALET_MAX_RUNNING_SANDBOXES: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).default(8)),
   /** Clone a project's post-setup home volume and reuse it for new threads. */
   VALET_SNAPSHOTS: z

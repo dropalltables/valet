@@ -4,6 +4,7 @@ import {
   MESSAGEABLE_STATUSES,
   PORTAL_ENV,
   SANDBOX,
+  formatBytes,
   slugify,
   type ChangesResponse,
   type CreatePrRequest,
@@ -31,10 +32,11 @@ import type { CredentialStore } from '../credentials/store.js'
 import { randomHex, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
 import { projects, threads, type PortalShare, type ProjectRow, type StoredPortal, type ThreadRow } from '../db/schema.js'
-import { LABEL_THREAD, sandboxName, volumeName, type DockerClient } from '../docker/client.js'
+import { LABEL_THREAD, diedOfMemory, sandboxName, volumeName, type DockerClient } from '../docker/client.js'
 import { waitForSupervisor, type ExecSocket, type SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError, badRequest, conflict, notFound } from '../errors.js'
 import type { EventLog } from '../events/log.js'
+import { loadProjectSecrets, redactString } from '../events/redact.js'
 import { withAskpass } from '../git/askpass.js'
 import { computeChanges, git, type GitRunner } from '../git/changes.js'
 import { GitHub, canonicalRepoUrl, cloneUrl, parseGitHubUrl, requireRepoRef } from '../git/github.js'
@@ -73,6 +75,7 @@ const log = logger('threads')
 const SUPERVISOR_BOOT_MS = 60_000
 const SUPERVISOR_REATTACH_MS = 5_000
 const SWEEP_INTERVAL_MS = 60_000
+const USAGE_INTERVAL_MS = 10_000
 const PR_REFRESH_MS = 60_000
 const FILE_CONTENT_LIMIT = 1024 * 1024
 
@@ -138,6 +141,8 @@ export class ThreadService {
   private readonly live = new Map<string, Live>()
   private readonly prChecked = new Map<string, number>()
   private sweeper: NodeJS.Timeout | null = null
+  private usageSampler: NodeJS.Timeout | null = null
+  private sampling = false
 
   private readonly db: Db
   private readonly cfg: Config
@@ -195,6 +200,11 @@ export class ThreadService {
     if (status === 'idle') set.lastActivityAt = new Date()
     await this.patch(id, set)
     await this.events.append(id, { type: 'status', status, detail, at: now() })
+  }
+
+  /** Why something is gone, when the kernel took it for exceeding the sandbox's `Memory`. */
+  private oomError(subject: 'Sandbox' | 'Agent process'): string {
+    return `${subject} ran out of memory (limit ${formatBytes(this.cfg.VALET_SANDBOX_MEMORY)})`
   }
 
   private async fail(id: string, err: unknown): Promise<void> {
@@ -299,24 +309,28 @@ export class ThreadService {
     if (!prompt) throw badRequest('prompt is required')
     const settings = await this.settings.get()
     const id = newId()
+    // The title, the branch name and the stored prompt are all shown or pushed outside
+    // the transcript, so what the event log redacts has to be redacted here too. The
+    // agent still receives the prompt as the user wrote it.
+    const stored = redactString(prompt, await loadProjectSecrets(this.db, this.cipher, project.id))
     const [row] = await this.db
       .insert(threads)
       .values({
         id,
         projectId: project.id,
-        title: titleFromPrompt(prompt),
+        title: titleFromPrompt(stored),
         agent: req.agent,
         model: req.model,
         permissions: req.permissions ?? settings.defaultPermissions,
         status: 'provisioning',
         error: null,
-        branch: `valet/${slugify(prompt)}-${shortHex()}`,
+        branch: `valet/${slugify(stored)}-${shortHex()}`,
         baseBranch: req.baseBranch?.trim() || project.defaultBranch,
         containerId: null,
         volumeName: volumeName(id),
         supervisorTokenEnc: this.cipher.encrypt(randomHex(32)),
         agentSessionId: null,
-        firstPrompt: prompt,
+        firstPrompt: stored,
         repoReady: false,
       })
       .returning()
@@ -387,8 +401,9 @@ export class ThreadService {
    * Called when the live supervisor stopped answering (a portal request or the port
    * poller failed to connect). A Docker round trip decides: a running container whose
    * supervisor answers is a transient failure and keeps its handle; anything else
-   * loses the handle, and a container that stopped outside pause() (OOM kill, daemon
-   * restart, `docker stop`) leaves the thread paused, so Wake starts it again.
+   * loses the handle, and a container that stopped outside pause() (daemon restart,
+   * `docker stop`) leaves the thread paused, so Wake starts it again. An OOM kill
+   * is an error instead, because the same work would hit the same limit again.
    */
   async checkSandbox(id: string): Promise<void> {
     const live = this.live.get(id)
@@ -405,7 +420,12 @@ export class ThreadService {
       this.dropSandbox(live)
       if (running) return
       const row = await this.row(id)
-      if (row.status === 'idle' || row.status === 'waiting' || row.status === 'running') await this.setStatus(id, 'paused')
+      // Only a thread that was live can have lost its container to the kernel; a row
+      // already paused or in error was stopped on purpose, and `diedOfMemory` cannot
+      // tell that stop apart from an OOM kill.
+      if (row.status !== 'idle' && row.status !== 'waiting' && row.status !== 'running') return
+      if (state && diedOfMemory(state)) await this.setStatus(id, 'error', this.oomError('Sandbox'))
+      else await this.setStatus(id, 'paused')
     })
   }
 
@@ -831,9 +851,24 @@ export class ThreadService {
     live.pendingRequests.clear()
     if (live.stoppingAdapter) return
     const id = live.id
-    const message = `Agent process exited (code ${info.code ?? 'null'}${info.signal ? `, signal ${info.signal}` : ''})`
+    const message = (await this.killedByOom(live, info))
+      ? this.oomError('Agent process')
+      : `Agent process exited (code ${info.code ?? 'null'}${info.signal ? `, signal ${info.signal}` : ''})`
     await this.events.append(id, { type: 'log', level: info.duringTurn ? 'error' : 'warn', message, at: now() })
     if (info.duringTurn) await this.setStatus(id, 'error', message)
+  }
+
+  /**
+   * Whether the kernel killed the agent for the sandbox's memory limit. This is the
+   * OOM that actually happens: PID 1 is docker-init and the cgroup is not killed as a
+   * group, so the kernel takes the biggest process (the CLI or a build it spawned) and
+   * the container survives with `OOMKilled` set. Nothing else SIGKILLs the agent, since
+   * stopAdapter() suppresses its own exit.
+   */
+  private async killedByOom(live: Live, info: { code: number | null; signal: string | null }): Promise<boolean> {
+    if (!live.sandbox || (info.signal !== 'SIGKILL' && info.code !== null)) return false
+    const state = await this.docker.inspect(live.sandbox.containerId).catch(() => null)
+    return state?.oomKilled ?? false
   }
 
   /** Ends the CLI process; in-flight turns are recorded as interrupted. */
@@ -1363,7 +1398,17 @@ export class ThreadService {
         if (!row.repoReady) {
           status = 'error'
           detail = 'Provisioning was interrupted by a restart'
-        } else status = c.State === 'running' ? 'idle' : 'paused'
+        } else if (c.State === 'running') status = 'idle'
+        else if (row.status === 'idle' || row.status === 'waiting' || row.status === 'running') {
+          // The thread was live when core stopped, so nothing here asked the container
+          // to stop; a row already paused stopped on purpose and stays paused, because
+          // `diedOfMemory` cannot tell a stop timeout from an OOM kill.
+          const state = await this.docker.inspect(c.Id)
+          if (state && diedOfMemory(state)) {
+            status = 'error'
+            detail = this.oomError('Sandbox')
+          } else status = 'paused'
+        } else status = 'paused'
       } else if (!(await this.docker.volumeExists(row.volumeName))) {
         status = 'error'
         detail = 'Sandbox volume is missing'
@@ -1394,10 +1439,40 @@ export class ThreadService {
     await this.events.append(id, { type: 'turn.end', turnId: open.turnId, status: 'interrupted', error: 'Core restarted', usage: null, at: now() })
   }
 
-  startSweeper(): void {
+  /** Idle pausing and the resource samples the thread header shows. */
+  startTimers(): void {
     if (this.sweeper) return
     this.sweeper = setInterval(() => void this.sweepIdle().catch((err) => log.error('idle sweep failed', { err })), SWEEP_INTERVAL_MS)
     this.sweeper.unref()
+    this.usageSampler = setInterval(() => void this.sampleAllUsage(), USAGE_INTERVAL_MS)
+    this.usageSampler.unref()
+  }
+
+  /**
+   * Memory and CPU of every running sandbox someone is watching. One sample costs about
+   * a second on the daemon, so they run together and a tick is skipped while the
+   * previous one is still going rather than letting ticks overlap.
+   */
+  private async sampleAllUsage(): Promise<void> {
+    if (this.sampling) return
+    this.sampling = true
+    try {
+      const watched = [...this.live.keys()].filter((id) => this.events.hasSubscribers(id))
+      await Promise.all(watched.map((id) => this.sampleUsage(id)))
+    } finally {
+      this.sampling = false
+    }
+  }
+
+  /** Publishes one sample for the thread, if its sandbox is running. Also called when a subscriber attaches, so the header is complete on first paint. */
+  async sampleUsage(id: string): Promise<void> {
+    const sandbox = this.live.get(id)?.sandbox
+    if (!sandbox) return
+    const usage = await this.docker.stats(sandbox.containerId).catch((err: unknown) => {
+      log.debug('stats failed', { id, message: errorMessage(err) })
+      return null
+    })
+    if (usage) this.events.publishUsage(id, usage)
   }
 
   private async sweepIdle(): Promise<void> {
@@ -1415,6 +1490,7 @@ export class ThreadService {
 
   async shutdown(): Promise<void> {
     if (this.sweeper) clearInterval(this.sweeper)
+    if (this.usageSampler) clearInterval(this.usageSampler)
     await Promise.all(
       [...this.live.values()].map(async (live) => {
         live.stoppingAdapter = true

@@ -34,6 +34,10 @@ const projects = new Map(
         createdAt: ago(60 * 24 * 2),
         lastUsedAt: ago(60 * 3),
       },
+      autoCreatePr: false,
+      archiveOnMerge: true,
+      autoFixCi: true,
+      redactSecrets: true,
       createdAt: ago(60 * 24 * 12),
       updatedAt: ago(60 * 5),
     },
@@ -45,6 +49,10 @@ const projects = new Map(
       defaultBranch: 'develop',
       hasSetupScript: false,
       snapshot: null,
+      autoCreatePr: false,
+      archiveOnMerge: true,
+      autoFixCi: true,
+      redactSecrets: true,
       createdAt: ago(60 * 24 * 40),
       updatedAt: ago(60 * 24 * 2),
     },
@@ -56,6 +64,10 @@ const projects = new Map(
       defaultBranch: 'main',
       hasSetupScript: null,
       snapshot: null,
+      autoCreatePr: false,
+      archiveOnMerge: true,
+      autoFixCi: true,
+      redactSecrets: true,
       createdAt: ago(60 * 24 * 3),
       updatedAt: ago(60 * 24 * 3),
     },
@@ -969,8 +981,8 @@ async function handle(req, res) {
       const id = `p-${randomUUID().slice(0, 6)}`
       const project =
         body.source === 'github'
-          ? { id, name: body.name ?? body.repoUrl.split('/').pop(), source: 'github', repoUrl: body.repoUrl, defaultBranch: body.defaultBranch ?? 'main', hasSetupScript: null, snapshot: null, createdAt: now(), updatedAt: now() }
-          : { id, name: body.name, source: 'blank', repoUrl: null, defaultBranch: 'main', hasSetupScript: null, snapshot: null, createdAt: now(), updatedAt: now() }
+          ? { id, name: body.name ?? body.repoUrl.split('/').pop(), source: 'github', repoUrl: body.repoUrl, defaultBranch: body.defaultBranch ?? 'main', hasSetupScript: null, snapshot: null, autoCreatePr: false, archiveOnMerge: true, autoFixCi: true, redactSecrets: true, createdAt: now(), updatedAt: now() }
+          : { id, name: body.name, source: 'blank', repoUrl: null, defaultBranch: 'main', hasSetupScript: null, snapshot: null, autoCreatePr: false, archiveOnMerge: true, autoFixCi: true, redactSecrets: true, createdAt: now(), updatedAt: now() }
       projects.set(id, project)
       envVars.set(id, [])
       broadcast(globalSubscribers, { t: 'project', project })

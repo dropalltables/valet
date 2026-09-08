@@ -25,6 +25,7 @@ export function toProject(row: ProjectRow): Project {
     autoCreatePr: row.autoCreatePr,
     archiveOnMerge: row.archiveOnMerge,
     autoFixCi: row.autoFixCi,
+    redactSecrets: row.redactSecrets,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }

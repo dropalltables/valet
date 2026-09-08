@@ -11,6 +11,7 @@ import type { Db } from '../db/index.js'
 import { projectEnvVars, projects, threads, type ProjectRow } from '../db/schema.js'
 import { badRequest, conflict, notFound } from '../errors.js'
 import type { EventLog } from '../events/log.js'
+import type { SecretRedactor } from '../events/redact.js'
 import { canonicalRepoUrl, parseGitHubUrl } from '../git/github.js'
 import { newId } from '../ids.js'
 import { logger } from '../logger.js'
@@ -32,6 +33,7 @@ export type UpdateProjectInput = {
   autoCreatePr?: boolean | undefined
   archiveOnMerge?: boolean | undefined
   autoFixCi?: boolean | undefined
+  redactSecrets?: boolean | undefined
 }
 export type PutProjectEnvInput = { vars: Array<{ name: string; value?: string | undefined; kind: 'plain' | 'secret' }> }
 
@@ -47,6 +49,7 @@ export class ProjectService {
     private readonly cfg: Config,
     private readonly events: EventLog,
     private readonly snapshots: SnapshotStore,
+    private readonly redactor: SecretRedactor,
     private readonly lookupDefaultBranch: (repoUrl: string) => Promise<string | null>,
   ) {}
 
@@ -134,8 +137,10 @@ export class ProjectService {
     if (patch.autoCreatePr !== undefined) set.autoCreatePr = patch.autoCreatePr
     if (patch.archiveOnMerge !== undefined) set.archiveOnMerge = patch.archiveOnMerge
     if (patch.autoFixCi !== undefined) set.autoFixCi = patch.autoFixCi
+    if (patch.redactSecrets !== undefined) set.redactSecrets = patch.redactSecrets
     const [row] = await this.db.update(projects).set(set).where(eq(projects.id, id)).returning()
     if (!row) throw notFound('project')
+    this.redactor.invalidate(id)
     const project = toProject(row)
     this.events.publishProject(project)
     return project
@@ -187,6 +192,7 @@ export class ProjectService {
         await tx.insert(projectEnvVars).values({ projectId: id, name: v.name, valueEnc, kind: v.kind })
       }
     })
+    this.redactor.invalidate(id)
     return this.listEnv(id)
   }
 

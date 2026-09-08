@@ -33,6 +33,7 @@ import type {
   Portal,
   Project,
   ProjectEnvVar,
+  SandboxUsage,
   Service,
   ServiceReadiness,
   Settings,
@@ -201,6 +202,7 @@ export type UpdateProjectRequest = {
   autoCreatePr?: boolean
   archiveOnMerge?: boolean
   autoFixCi?: boolean
+  redactSecrets?: boolean
 }
 
 /**
@@ -558,6 +560,8 @@ export type StreamFrame =
   | { t: 'portals'; portals: Portal[] }
   /** Full current list, sent once after replay and on every poll while the sandbox runs. */
   | { t: 'services'; services: Service[] }
+  /** Memory and CPU of the running container, sampled every 10 s while anyone watches. */
+  | { t: 'usage'; usage: SandboxUsage }
   | { t: 'error'; message: string }
 
 /**

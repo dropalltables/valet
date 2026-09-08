@@ -94,6 +94,7 @@ const updateProjectSchema = z.object({
   autoCreatePr: z.boolean().optional(),
   archiveOnMerge: z.boolean().optional(),
   autoFixCi: z.boolean().optional(),
+  redactSecrets: z.boolean().optional(),
 })
 const putEnvSchema = z.object({
   vars: z.array(z.object({ name: z.string(), value: z.string().optional(), kind: z.enum(['plain', 'secret']) })),

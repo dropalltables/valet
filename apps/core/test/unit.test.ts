@@ -3,13 +3,14 @@ import crypto from 'node:crypto'
 import { test } from 'node:test'
 import zlib from 'node:zlib'
 import type Docker from 'dockerode'
+import { formatBytes } from '@valet/shared'
 import { normalizeClaudeTool } from '../src/agents/tool-names.js'
 import { parseCookie } from '../src/auth.js'
 import { parseSize } from '../src/config.js'
 import { parseDeviceLoginOutput } from '../src/credentials/device-login.js'
 import { maskToken } from '../src/credentials/store.js'
 import { Cipher, timingSafeEqualStrings } from '../src/crypto.js'
-import { isLocallyBuilt, reposVolumeName, soleNetworkName } from '../src/docker/client.js'
+import { diedOfMemory, isLocallyBuilt, reposVolumeName, soleNetworkName, toUsage } from '../src/docker/client.js'
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
 import { servicesReplySchema } from '@valet/shared'
 import { parseGitHubUrl } from '../src/git/github.js'
@@ -57,6 +58,45 @@ test('docker environment discovery', () => {
   assert.equal(isLocallyBuilt('valet-sandbox:latest'), true)
   assert.equal(isLocallyBuilt('ghcr.io/your-org/valet-sandbox:latest'), false)
   assert.equal(isLocallyBuilt('your-org/valet-sandbox:latest'), false)
+})
+
+test('byte formatting', () => {
+  assert.equal(formatBytes(4 * 1024 ** 3), '4 GB')
+  assert.equal(formatBytes(1.23 * 1024 ** 3), '1.2 GB')
+  assert.equal(formatBytes(512 * 1024 ** 2), '512 MB')
+  assert.equal(formatBytes(486.4 * 1024 ** 2), '486 MB')
+  assert.equal(formatBytes(0), '0 B')
+})
+
+test('out-of-memory containers', () => {
+  const state = { id: 'c1', status: 'exited', ip: null, imageId: 'i1' }
+  assert.equal(diedOfMemory({ ...state, running: false, oomKilled: true, exitCode: 137 }), true)
+  // A build step the kernel killed leaves the flag set on a container that lives on.
+  assert.equal(diedOfMemory({ ...state, running: true, oomKilled: true, exitCode: 0 }), false)
+  assert.equal(diedOfMemory({ ...state, running: false, oomKilled: false, exitCode: 137 }), false)
+  assert.equal(diedOfMemory({ ...state, running: false, oomKilled: true, exitCode: 0 }), false)
+})
+
+test('container stats leave out the page cache', () => {
+  const cpu = { cpu_usage: { total_usage: 2e9 }, system_cpu_usage: 100e9, online_cpus: 8 }
+  const precpu = { cpu_usage: { total_usage: 1e9 }, system_cpu_usage: 90e9, online_cpus: 8 }
+  // cgroup v2: usage is memory.current, inactive_file is the reclaimable cache in it.
+  assert.deepEqual(toUsage({ memory_stats: { usage: 301_200_000, stats: { inactive_file: 300_000_000 } }, cpu_stats: cpu, precpu_stats: precpu }), {
+    memoryBytes: 1_200_000,
+    cpuPercent: 80,
+  })
+  // cgroup v1 reports the hierarchical figure as well, and Docker prefers it.
+  assert.deepEqual(
+    toUsage({
+      memory_stats: { usage: 500_000_000, stats: { inactive_file: 100_000_000, total_inactive_file: 400_000_000 } },
+      cpu_stats: cpu,
+      precpu_stats: precpu,
+    }).memoryBytes,
+    100_000_000,
+  )
+  // A first sample has no previous CPU reading, and Windows sends no memory breakdown.
+  const idle = { cpu_usage: { total_usage: 0 }, system_cpu_usage: 0 }
+  assert.deepEqual(toUsage({ memory_stats: { usage: 4096 }, cpu_stats: idle, precpu_stats: idle }), { memoryBytes: 4096, cpuPercent: 0 })
 })
 
 test('claude tool names', () => {

@@ -36,6 +36,7 @@ export const projects = pgTable('projects', {
   autoCreatePr: boolean('auto_create_pr').notNull().default(false),
   archiveOnMerge: boolean('archive_on_merge').notNull().default(true),
   autoFixCi: boolean('auto_fix_ci').notNull().default(true),
+  redactSecrets: boolean('redact_secrets').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

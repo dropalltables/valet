@@ -96,21 +96,25 @@ function Details({ project }: { project: Project }) {
   const { upsertProject } = useAppData()
   const [name, setName] = useState(project.name)
   const [branch, setBranch] = useState(project.defaultBranch)
+  const [redact, setRedact] = useState(project.redactSecrets)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     setName(project.name)
     setBranch(project.defaultBranch)
-  }, [project.name, project.defaultBranch])
+    setRedact(project.redactSecrets)
+  }, [project.name, project.defaultBranch, project.redactSecrets])
 
-  const dirty = name.trim() !== project.name || branch.trim() !== project.defaultBranch
+  const dirty = name.trim() !== project.name || branch.trim() !== project.defaultBranch || redact !== project.redactSecrets
 
   async function save(e: FormEvent): Promise<void> {
     e.preventDefault()
     if (!dirty) return
     setBusy(true)
     try {
-      upsertProject(await api.projects.update(project.id, { name: name.trim(), defaultBranch: branch.trim() }))
+      upsertProject(
+        await api.projects.update(project.id, { name: name.trim(), defaultBranch: branch.trim(), redactSecrets: redact }),
+      )
       toast.success('Saved')
     } catch (err) {
       toast.error(errorMessage(err))
@@ -130,6 +134,10 @@ function Details({ project }: { project: Project }) {
           <Label htmlFor="branch">Default branch</Label>
           <Input id="branch" value={branch} onChange={(e) => setBranch(e.target.value)} className="font-mono" />
         </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <Switch id="redact-secrets" checked={redact} onCheckedChange={setRedact} />
+        <Label htmlFor="redact-secrets">Redact secret values in the transcript</Label>
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
         <dt className="text-muted-foreground">Repository</dt>

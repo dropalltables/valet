@@ -10,6 +10,7 @@ import { createDb } from './db/index.js'
 import { runMigrations } from './db/migrate.js'
 import { DockerClient } from './docker/client.js'
 import { EventLog } from './events/log.js'
+import { SecretRedactor, loadThreadSecrets } from './events/redact.js'
 import { GitHub, parseGitHubUrl } from './git/github.js'
 import { errorMessage, logger } from './logger.js'
 import { McpServerStore } from './mcp/store.js'
@@ -42,11 +43,12 @@ async function main(): Promise<void> {
     (err: unknown) => log.warn('docker is not reachable; sandboxes will fail until it is', { message: errorMessage(err) }),
   )
 
-  const events = new EventLog(db)
+  const redactor = new SecretRedactor((threadId) => loadThreadSecrets(db, cipher, threadId))
+  const events = new EventLog(db, redactor)
   const credentials = new CredentialStore(db, cipher)
   const settings = new SettingsService(db, cfg, cipher)
   const snapshots = new SnapshotStore(db, cfg, docker, events)
-  const projects = new ProjectService(db, cipher, cfg, events, snapshots, async (repoUrl) => {
+  const projects = new ProjectService(db, cipher, cfg, events, snapshots, redactor, async (repoUrl) => {
     const ref = parseGitHubUrl(repoUrl)
     if (!ref) return null
     const token = await credentials.githubTokenFor(ref)
@@ -76,7 +78,7 @@ async function main(): Promise<void> {
 
   await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))
-  threads.startSweeper()
+  threads.startTimers()
   docker.startImageWatcher()
   snapshots.startSweeper()
   await catalog.refreshStale(STALE_AFTER_MS).catch((err: unknown) => log.error('model catalog check failed', { err }))

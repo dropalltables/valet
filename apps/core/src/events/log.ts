@@ -1,8 +1,9 @@
 import { and, asc, desc, eq, gt, inArray, max, sql } from 'drizzle-orm'
-import type { GlobalFrame, Portal, Project, Service, StoredEvent, StreamFrame, Thread, ThreadEvent, ThreadListItem } from '@valet/shared'
+import type { GlobalFrame, Portal, Project, SandboxUsage, Service, StoredEvent, StreamFrame, Thread, ThreadEvent, ThreadListItem } from '@valet/shared'
 import type { Db } from '../db/index.js'
 import { threadEvents } from '../db/schema.js'
 import { logger } from '../logger.js'
+import type { SecretRedactor } from './redact.js'
 
 const log = logger('events')
 
@@ -29,12 +30,18 @@ type ThreadState = {
  * Deltas for one item are merged and written at most every COALESCE_MS, or as soon
  * as any non-delta event for the thread arrives, so persisted order equals arrival
  * order and live subscribers see exactly what a replay would.
+ *
+ * Project secrets are redacted on the way out, after deltas merge, so a value split
+ * across chunks within one coalescing window is still caught.
  */
 export class EventLog {
   private readonly threads = new Map<string, ThreadState>()
   private readonly globalSubscribers = new Set<(frame: GlobalFrame) => void>()
 
-  constructor(private readonly db: Db) {}
+  constructor(
+    private readonly db: Db,
+    private readonly redactor: SecretRedactor,
+  ) {}
 
   private state(threadId: string): ThreadState {
     let s = this.threads.get(threadId)
@@ -90,7 +97,8 @@ export class EventLog {
     for (const e of batch) await this.persist(threadId, e)
   }
 
-  private async persist(threadId: string, event: ThreadEvent): Promise<void> {
+  private async persist(threadId: string, raw: ThreadEvent): Promise<void> {
+    const event = await this.redactor.apply(threadId, raw)
     const s = this.state(threadId)
     if (s.nextSeq === null) {
       const [row] = await this.db
@@ -211,6 +219,15 @@ export class EventLog {
     this.fanout(threadId, { t: 'services', services })
   }
 
+  publishUsage(threadId: string, usage: SandboxUsage): void {
+    this.fanout(threadId, { t: 'usage', usage })
+  }
+
+  /** Whether anyone is watching the thread; sampling `docker stats` for nobody is waste. */
+  hasSubscribers(threadId: string): boolean {
+    return (this.threads.get(threadId)?.subscribers.size ?? 0) > 0
+  }
+
   publishThreadDeleted(id: string): void {
     this.fanoutGlobal({ t: 'thread.deleted', id })
     this.forget(id)
@@ -226,6 +243,7 @@ export class EventLog {
 
   /** Drops in-memory state; subscribers are closed by their sockets. */
   forget(threadId: string): void {
+    this.redactor.forget(threadId)
     const s = this.threads.get(threadId)
     if (!s) return
     if (s.timer) clearTimeout(s.timer)
