@@ -106,6 +106,12 @@ export type Project = {
   defaultBranch: string
   /** Whether the repo has a `.valet/setup` script (detected on first clone). */
   hasSetupScript: boolean | null
+  /** Open a pull request on the first turn that ends with commits and no pull request yet. */
+  autoCreatePr: boolean
+  /** Archive the thread when its pull request is merged. */
+  archiveOnMerge: boolean
+  /** Default for a new pull request's `autoFixCi`. */
+  autoFixCi: boolean
   createdAt: string
   updatedAt: string
 }
@@ -120,6 +126,22 @@ export type ProjectEnvVar = {
 }
 
 export type PullRequestState = 'open' | 'merged' | 'closed'
+
+/**
+ * CI-failure messages Valet sends a thread for one pull request before it stops.
+ * Each attempt covers one head commit, however many checks failed on it.
+ */
+export const CI_FIX_MAX_ATTEMPTS = 5
+
+export type PullRequest = {
+  url: string
+  number: number
+  state: PullRequestState
+  /** Send CI failures and `@valet` comments on this pull request to the thread. */
+  autoFixCi: boolean
+  /** CI failures reported to the thread so far; at `CI_FIX_MAX_ATTEMPTS` Valet stops. */
+  ciFixAttempts: number
+}
 
 export type Thread = {
   id: string
@@ -139,7 +161,7 @@ export type Thread = {
   containerId: string | null
   /** Agent-side session id (Claude session uuid / Codex thread id) once a turn has run. */
   agentSessionId: string | null
-  pr: { url: string; number: number; state: PullRequestState } | null
+  pr: PullRequest | null
   /** Aggregate cost in USD as estimated by the agent; null when unknown. */
   costUsd: number | null
   /** Last event of any kind; drives the idle timer and list ordering. */
@@ -282,11 +304,13 @@ export type CredentialKind =
   | 'codex'
   /** GitHub personal access token used for clone, push, and pull requests. */
   | 'github'
+  /** GitHub App: id, private key, and webhook secret. Preferred over the token when set. */
+  | 'github-app'
 
 export type CredentialStatus = {
   kind: CredentialKind
   configured: boolean
-  /** e.g. `sk-ant-oat…3f9a`, `ChatGPT (you@example.com)`, `ghp_…a1b2`. */
+  /** e.g. `sk-ant-oat…3f9a`, `ChatGPT (you@example.com)`, `ghp_…a1b2`, `App 123456`. */
   label: string | null
   /** For `claude`/`codex`: `oauth` (subscription) or `api-key`. */
   method: 'oauth' | 'api-key' | null

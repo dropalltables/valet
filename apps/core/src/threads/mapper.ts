@@ -16,7 +16,7 @@ export function toThread(row: ThreadRow): Thread {
     baseBranch: row.baseBranch,
     containerId: row.containerId,
     agentSessionId: row.agentSessionId,
-    pr: row.pr ?? null,
+    pr: row.pr ? { url: row.pr.url, number: row.pr.number, state: row.pr.state, autoFixCi: row.pr.autoFixCi, ciFixAttempts: row.pr.ciFixAttempts } : null,
     costUsd: row.costUsd,
     lastActivityAt: row.lastActivityAt.toISOString(),
     createdAt: row.createdAt.toISOString(),

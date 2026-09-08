@@ -57,19 +57,43 @@ export type HealthResponse = Health
 export type SettingsResponse = Settings
 export type UpdateSettingsRequest = Partial<Settings>
 
-/** GET /api/credentials -> CredentialStatus[] (one per CredentialKind, always all three) */
+/** GET /api/credentials -> CredentialStatus[] (one per CredentialKind, always all of them) */
 export type CredentialsResponse = CredentialStatus[]
 
 /**
  * PUT /api/credentials/:kind
- *  claude: { token }  where token is `sk-ant-oat…` (setup-token) or `sk-ant-api…`
- *  codex:  { apiKey } for API-key auth (device login is a separate flow below)
- *  github: { token }  personal access token with `repo` scope (classic) or
- *          Contents+Pull requests+Metadata read/write (fine-grained)
+ *  claude:     { token }  where token is `sk-ant-oat…` (setup-token) or `sk-ant-api…`
+ *  codex:      { apiKey } for API-key auth (device login is a separate flow below)
+ *  github:     { token }  personal access token with `repo` scope (classic) or
+ *              Contents+Pull requests+Metadata read/write (fine-grained)
+ *  github-app: { appId, privateKey, webhookSecret } from the GitHub App's settings page
  * -> CredentialStatus
  * DELETE /api/credentials/:kind -> 204
  */
-export type PutCredentialRequest = { token?: string; apiKey?: string }
+export type PutCredentialRequest = {
+  token?: string
+  apiKey?: string
+  appId?: number
+  privateKey?: string
+  webhookSecret?: string
+}
+
+/**
+ * GET /api/credentials/github/app -> where the App's webhook must point and which
+ * accounts have installed it (read from GitHub with the App's own JWT). `error` is
+ * GitHub's message when the installation list could not be read.
+ */
+export type GitHubAppInstallation = {
+  id: number
+  /** Organization or user the App is installed on. */
+  account: string
+  repositorySelection: 'all' | 'selected'
+}
+export type GitHubAppResponse = {
+  webhookUrl: string
+  installations: GitHubAppInstallation[]
+  error: string | null
+}
 
 /**
  * POST /api/credentials/codex/device-login -> DeviceLogin (status pending)
@@ -134,8 +158,14 @@ export type CreateProjectRequest =
   | { source: 'github'; repoUrl: string; defaultBranch?: string; name?: string }
   | { source: 'blank'; name: string }
 
-/** GET /api/projects/:id -> Project ; PATCH /api/projects/:id { name?, defaultBranch? } ; DELETE -> 204 (fails 409 while threads exist unless ?force=1) */
-export type UpdateProjectRequest = { name?: string; defaultBranch?: string }
+/** GET /api/projects/:id -> Project ; PATCH /api/projects/:id ; DELETE -> 204 (fails 409 while threads exist unless ?force=1) */
+export type UpdateProjectRequest = {
+  name?: string
+  defaultBranch?: string
+  autoCreatePr?: boolean
+  archiveOnMerge?: boolean
+  autoFixCi?: boolean
+}
 
 /** GET /api/projects/:id/env -> { vars } ; PUT /api/projects/:id/env { vars: [{name, value, kind}] } replaces all ; values omitted keep existing */
 export type ProjectEnvResponse = { vars: ProjectEnvVar[] }
@@ -170,8 +200,8 @@ export type CreateThreadRequest = {
   baseBranch?: string
 }
 
-/** GET /api/threads/:id -> ThreadListItem ; PATCH { title? } ; DELETE -> 204 (removes container and volume) */
-export type UpdateThreadRequest = { title?: string }
+/** GET /api/threads/:id -> ThreadListItem ; PATCH { title?, autoFixCi? } ; DELETE -> 204 (removes container and volume) */
+export type UpdateThreadRequest = { title?: string; autoFixCi?: boolean }
 
 /**
  * POST /api/threads/:id/messages -> { turnId }
@@ -228,6 +258,27 @@ export type FileResponse = { path: string; content: string | null; truncated: bo
  */
 export type PushResponse = { branch: string; pushed: true }
 export type CreatePrRequest = { title?: string; body?: string; draft?: boolean }
+
+// ---------------------------------------------------------------------------
+// GitHub webhooks
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/webhooks/github
+ *
+ * The GitHub App's webhook endpoint. Authenticated by the `X-Hub-Signature-256`
+ * HMAC over the raw body with the stored webhook secret, not by the session
+ * cookie, so it is mounted ahead of the session check. Answers 202 once the
+ * delivery is accepted, 401 for a bad signature, 503 when no App is configured.
+ *
+ * Handled: `check_run`, `check_suite`, and `workflow_run` completions with
+ * conclusion `failure` (one message per head commit, up to `CI_FIX_MAX_ATTEMPTS`
+ * per pull request); `issue_comment` and `pull_request_review_comment` creations
+ * that mention `@valet` and come from a repository owner, member, or collaborator,
+ * since the comment becomes a prompt; `pull_request` closures and reopenings
+ * (updates `pr.state`, archives the thread on merge when the project says so).
+ */
+export const GITHUB_WEBHOOK_PATH = '/api/webhooks/github'
 
 // ---------------------------------------------------------------------------
 // Portals

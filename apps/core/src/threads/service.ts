@@ -1,5 +1,6 @@
-import { and, asc, desc, eq, lt, ne, notInArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, lt, ne, notInArray, sql } from 'drizzle-orm'
 import {
+  CI_FIX_MAX_ATTEMPTS,
   MESSAGEABLE_STATUSES,
   PORTAL_ENV,
   SANDBOX,
@@ -29,14 +30,15 @@ import type { Config } from '../config.js'
 import type { CredentialStore } from '../credentials/store.js'
 import { randomHex, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
-import { projects, threads, type PortalShare, type StoredPortal, type ThreadRow } from '../db/schema.js'
+import { projects, threads, type PortalShare, type ProjectRow, type StoredPortal, type ThreadRow } from '../db/schema.js'
 import { LABEL_THREAD, sandboxName, volumeName, type DockerClient } from '../docker/client.js'
 import { waitForSupervisor, type ExecSocket, type SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError, badRequest, conflict, notFound } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { withAskpass } from '../git/askpass.js'
 import { computeChanges, git } from '../git/changes.js'
-import { GitHub, cloneUrl, requireRepoRef } from '../git/github.js'
+import { GitHub, canonicalRepoUrl, cloneUrl, parseGitHubUrl, requireRepoRef } from '../git/github.js'
+import { ciFixDecision, ciFixMessage, commentMessage, type WebhookIntent } from '../git/webhook.js'
 import { newId, shortHex } from '../ids.js'
 import { errorMessage, logger } from '../logger.js'
 import { SandboxPoller } from '../portals/poller.js'
@@ -71,6 +73,19 @@ type QueuedMessage = { turnId: string; text: string; images: PromptImage[] }
 
 type LiveSandbox = { containerId: string; supervisor: SupervisorClient; exec: ExecSocket | null; poller: SandboxPoller }
 
+/** What a GitHub webhook delivery did to the thread it matched. */
+export type WebhookOutcome =
+  | 'ignored'
+  | 'no-thread'
+  | 'not-messageable'
+  | 'messaged'
+  | 'disabled'
+  | 'closed'
+  | 'duplicate'
+  | 'exhausted'
+  | 'state-updated'
+  | 'archived'
+
 /** Where a portal request for a thread should go. */
 export type PortalTarget =
   | { kind: 'missing' }
@@ -92,6 +107,8 @@ type Live = {
   currentTurnId: string | null
   pendingRequests: Map<string, { turnId: string; kind: 'permission' | 'question' }>
   stoppingAdapter: boolean
+  /** Head commit auto-create-PR last tried, so a failure is not retried every turn. */
+  autoPrSha: string | null
 }
 
 export type ThreadServiceDeps = {
@@ -187,6 +204,7 @@ export class ThreadService {
         currentTurnId: null,
         pendingRequests: new Map(),
         stoppingAdapter: false,
+        autoPrSha: null,
       }
       this.live.set(id, live)
     }
@@ -245,10 +263,11 @@ export class ThreadService {
     if (Date.now() - last < PR_REFRESH_MS) return row
     this.prChecked.set(row.id, Date.now())
     try {
-      const token = await this.credentials.githubToken()
-      if (!token) return row
       const project = await this.projects.getRow(row.projectId)
-      const state = await new GitHub(token).pullRequestState(requireRepoRef(project.repoUrl), row.pr.number)
+      const ref = requireRepoRef(project.repoUrl)
+      const token = await this.credentials.githubTokenFor(ref)
+      if (!token) return row
+      const state = await new GitHub(token).pullRequestState(ref, row.pr.number)
       if (state === row.pr.state) return row
       return await this.patch(row.id, { pr: { ...row.pr, state } })
     } catch (err) {
@@ -294,11 +313,16 @@ export class ThreadService {
     return toThread(row)
   }
 
-  async update(id: string, patch: { title?: string }): Promise<Thread> {
+  async update(id: string, patch: { title?: string; autoFixCi?: boolean }): Promise<Thread> {
     const set: Partial<ThreadRow> = {}
     if (patch.title !== undefined) {
       if (!patch.title.trim()) throw badRequest('title must not be empty')
       set.title = patch.title.trim()
+    }
+    if (patch.autoFixCi !== undefined) {
+      const current = await this.row(id)
+      if (!current.pr) throw badRequest('thread has no pull request')
+      set.pr = { ...current.pr, autoFixCi: patch.autoFixCi }
     }
     const row = Object.keys(set).length > 0 ? await this.patch(id, set) : await this.row(id)
     return toThread(row)
@@ -497,7 +521,7 @@ export class ThreadService {
         sink('info', 'Cloning repository')
         const source: CloneSource =
           project.source === 'github'
-            ? { kind: 'github', url: cloneUrl(requireRepoRef(project.repoUrl)), token: await this.credentials.githubToken() }
+            ? { kind: 'github', url: cloneUrl(requireRepoRef(project.repoUrl)), token: await this.credentials.githubTokenFor(requireRepoRef(project.repoUrl)) }
             : { kind: 'blank', path: `${SANDBOX.reposMount}/${project.id}.git` }
         await cloneRepo(sandbox.supervisor, source, row.baseBranch, signal)
       }
@@ -713,7 +737,8 @@ export class ThreadService {
     const supervisor = live.sandbox?.supervisor
     if (supervisor) {
       if (row.agent === 'codex') await syncCodexAuth(supervisor, this.credentials).catch((err) => log.warn('codex auth sync failed', { id, err }))
-      await this.refreshDiffStats(id, supervisor, row.baseBranch)
+      const changes = await this.refreshDiffStats(id, supervisor, row.baseBranch)
+      if (changes) await this.autoCreatePr(live, changes)
     }
 
     // The bookkeeping above is slow; by now sendMessage may have started the next
@@ -763,12 +788,38 @@ export class ThreadService {
     }
   }
 
-  private async refreshDiffStats(id: string, supervisor: SupervisorClient, baseBranch: string): Promise<void> {
+  private async refreshDiffStats(id: string, supervisor: SupervisorClient, baseBranch: string): Promise<ChangesResponse | null> {
     try {
       const changes = await computeChanges(repoGit(supervisor, {}), baseBranch)
       await this.patch(id, { diffStats: changes.stats })
+      return changes
     } catch (err) {
       log.debug('diff stats unavailable', { id, message: errorMessage(err) })
+      return null
+    }
+  }
+
+  /**
+   * Opens the pull request the project asked for, once the branch has commits. At most
+   * one attempt per head commit: a failure that will not fix itself (no credential, a
+   * pull request already open on GitHub for the branch) must not be retried and
+   * re-logged at the end of every turn.
+   */
+  private async autoCreatePr(live: Live, changes: ChangesResponse): Promise<void> {
+    const head = changes.commits[0]?.sha
+    if (!head || live.autoPrSha === head) return
+    // The diff refresh above is slow; the user may have opened the pull request since.
+    const row = await this.row(live.id)
+    if (row.pr) return
+    const project = await this.projects.getRow(row.projectId)
+    if (!project.autoCreatePr || project.source !== 'github') return
+    live.autoPrSha = head
+    try {
+      const thread = await this.createPr(row.id, {})
+      const message = thread.pr ? `Opened pull request ${thread.pr.url}` : 'Opened pull request'
+      await this.events.append(row.id, { type: 'log', level: 'info', message, at: now() })
+    } catch (err) {
+      await this.events.append(row.id, { type: 'log', level: 'warn', message: `Could not open a pull request: ${errorMessage(err)}`, at: now() })
     }
   }
 
@@ -1042,7 +1093,7 @@ export class ThreadService {
   async push(id: string): Promise<{ branch: string }> {
     const { row, supervisor } = await this.requireRunning(id)
     const project = await this.projects.getRow(row.projectId)
-    const token = project.source === 'github' ? await this.credentials.githubToken() : null
+    const token = project.source === 'github' ? await this.credentials.githubTokenFor(requireRepoRef(project.repoUrl)) : null
     if (project.source === 'github' && !token) throw badRequest('No GitHub credential is configured')
     const run = repoGit(supervisor, {})
     await git(run, ['add', '-A'])
@@ -1058,10 +1109,10 @@ export class ThreadService {
     const project = await this.projects.getRow(row.projectId)
     if (project.source !== 'github') throw badRequest('blank projects have no GitHub repository')
     if (row.pr) throw conflict('a pull request already exists for this thread')
-    const token = await this.credentials.githubToken()
+    const ref = requireRepoRef(project.repoUrl)
+    const token = await this.credentials.githubTokenFor(ref)
     if (!token) throw badRequest('No GitHub credential is configured')
     await this.push(id)
-    const ref = requireRepoRef(project.repoUrl)
     const body = req.body ?? `${row.firstPrompt}\n\nOpened from Valet: ${this.cfg.VALET_BASE_URL}/threads/${row.id}`
     const pr = await new GitHub(token).createPullRequest(ref, {
       head: row.branch,
@@ -1070,8 +1121,146 @@ export class ThreadService {
       body,
       draft: req.draft ?? false,
     })
-    const updated = await this.patch(id, { pr: { url: pr.url, number: pr.number, state: 'open' } })
+    const updated = await this.patch(id, {
+      pr: { url: pr.url, number: pr.number, state: 'open', autoFixCi: project.autoFixCi, ciFixAttempts: 0, ciFixSha: null },
+    })
     return toThread(updated)
+  }
+
+  // ---- github webhooks ---------------------------------------------------------------------------
+
+  /**
+   * What a delivery did, for the webhook response and the log. `no-thread` covers a
+   * pull request Valet does not own, which is the common case on a shared App.
+   */
+  async applyWebhook(intent: WebhookIntent): Promise<WebhookOutcome> {
+    const match = await this.threadForPr(intent)
+    if (!match) return 'no-thread'
+    switch (intent.kind) {
+      case 'ci-failure':
+        return this.applyCiFailure(match.row, intent)
+      case 'comment':
+        return this.deliver(match.row, commentMessage(intent))
+      case 'pr-state':
+        return this.applyPrState(match.row, match.project, intent)
+    }
+  }
+
+  /**
+   * The thread whose pull request the delivery is about: by number, or by branch for
+   * check payloads that carry no pull request at all. A number that matches no thread
+   * belongs to someone else's pull request, even when a thread shares its branch.
+   * Only threads with a pull request of their own can match.
+   */
+  private async threadForPr(intent: WebhookIntent): Promise<{ row: ThreadRow; project: ProjectRow } | null> {
+    // `repo` is GitHub's `owner/repo`; the project stores the canonical URL.
+    const ref = parseGitHubUrl(`https://github.com/${intent.repo}`)
+    if (!ref) return null
+    const repoUrl = canonicalRepoUrl(ref).toLowerCase()
+    const rows = await this.db
+      .select({ thread: threads, project: projects })
+      .from(threads)
+      .innerJoin(projects, eq(projects.id, threads.projectId))
+      .where(sql`lower(${projects.repoUrl}) = ${repoUrl}`)
+      .orderBy(desc(threads.lastActivityAt))
+    const withPr = rows.filter((r) => r.thread.pr !== null)
+    const match =
+      intent.prNumber !== null
+        ? withPr.find((r) => r.thread.pr?.number === intent.prNumber)
+        : intent.branch !== null
+          ? withPr.find((r) => r.thread.branch === intent.branch)
+          : undefined
+    return match ? { row: match.thread, project: match.project } : null
+  }
+
+  private async applyCiFailure(row: ThreadRow, intent: Extract<WebhookIntent, { kind: 'ci-failure' }>): Promise<WebhookOutcome> {
+    const claimed = await this.claimCiFix(row.id, intent.sha)
+    if (claimed) return this.deliver(claimed, ciFixMessage(intent.check, intent.detailsUrl))
+    return this.reportCiFixSkipped(row.id, intent.sha)
+  }
+
+  /**
+   * Claims one auto-fix attempt for `sha`, or null when the pull request does not
+   * qualify. GitHub reports one failed Actions run three times within the same second
+   * (`check_run`, `check_suite`, `workflow_run`), so the conditions have to be the
+   * update's own: deciding on a row that was read first sends three messages and loses
+   * two of the three attempt increments.
+   */
+  private async claimCiFix(id: string, sha: string): Promise<ThreadRow | null> {
+    const [row] = await this.db
+      .update(threads)
+      .set({
+        pr: sql`${threads.pr} || jsonb_build_object('ciFixSha', ${sha}::text, 'ciFixAttempts', (${threads.pr} ->> 'ciFixAttempts')::int + 1)`,
+      })
+      .where(
+        and(
+          eq(threads.id, id),
+          inArray(threads.status, [...MESSAGEABLE_STATUSES]),
+          sql`${threads.pr} ->> 'state' = 'open'`,
+          sql`(${threads.pr} ->> 'autoFixCi')::boolean`,
+          sql`${threads.pr} ->> 'ciFixSha' is distinct from ${sha}`,
+          sql`(${threads.pr} ->> 'ciFixAttempts')::int < ${CI_FIX_MAX_ATTEMPTS}`,
+        ),
+      )
+      .returning()
+    if (!row) return null
+    this.events.publishThread(await this.listItem(row))
+    return row
+  }
+
+  /**
+   * Why a claim did not happen, read back from the row. Exhaustion is announced once
+   * per pull request: clearing `ciFixSha` is the marker, and clearing it conditionally
+   * means only one of the three deliveries for a commit announces it.
+   */
+  private async reportCiFixSkipped(id: string, sha: string): Promise<WebhookOutcome> {
+    const row = await this.row(id)
+    const pr = row.pr
+    if (!pr) return 'no-thread'
+    const decision = ciFixDecision(pr, sha)
+    // The pull request qualifies, so the claim can only have failed on the status.
+    if (decision.send) return 'not-messageable'
+    if (decision.reason !== 'exhausted') return decision.reason
+    const [marked] = await this.db
+      .update(threads)
+      .set({ pr: sql`${threads.pr} || jsonb_build_object('ciFixSha', null::text)` })
+      .where(
+        and(
+          eq(threads.id, id),
+          sql`${threads.pr} ->> 'ciFixSha' is not null`,
+          sql`(${threads.pr} ->> 'ciFixAttempts')::int >= ${CI_FIX_MAX_ATTEMPTS}`,
+        ),
+      )
+      .returning()
+    if (!marked) return 'exhausted'
+    this.events.publishThread(await this.listItem(marked))
+    await this.events.append(id, {
+      type: 'log',
+      level: 'warn',
+      message: `Auto-fix CI stopped after ${CI_FIX_MAX_ATTEMPTS} attempts`,
+      at: now(),
+    })
+    return 'exhausted'
+  }
+
+  private async applyPrState(
+    row: ThreadRow,
+    project: ProjectRow,
+    intent: Extract<WebhookIntent, { kind: 'pr-state' }>,
+  ): Promise<WebhookOutcome> {
+    const pr = row.pr
+    if (!pr) return 'no-thread'
+    if (pr.state !== intent.state) await this.patch(row.id, { pr: { ...pr, state: intent.state } })
+    if (intent.state !== 'merged' || !project.archiveOnMerge || row.status === 'archived') return 'state-updated'
+    await this.archive(row.id)
+    return 'archived'
+  }
+
+  /** Sends a message on the thread's behalf; wakes it when paused, like any message. */
+  private async deliver(row: ThreadRow, text: string): Promise<WebhookOutcome> {
+    if (!MESSAGEABLE_STATUSES.includes(row.status)) return 'not-messageable'
+    await this.sendMessage(row.id, { text })
+    return 'messaged'
   }
 
   // ---- housekeeping ------------------------------------------------------------------------------

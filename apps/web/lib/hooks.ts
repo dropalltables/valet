@@ -26,6 +26,10 @@ export function useCredentials() {
   return useSWR('credentials', () => api.credentials.list())
 }
 
+export function useGitHubApp() {
+  return useSWR('github-app', () => api.credentials.githubApp(), { revalidateOnFocus: false })
+}
+
 export function useBranches(repoUrl: string | null) {
   const slug = repoUrl ? repoUrl.replace(/^https?:\/\/github\.com\//, '').split('/') : null
   const owner = slug?.[0]

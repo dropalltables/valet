@@ -53,6 +53,7 @@ export function ProjectView({ id }: { id: string }) {
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-6 py-8">
         <Details project={project} />
+        {project.source === 'github' && <PullRequestSettings project={project} />}
         <EnvVars projectId={project.id} />
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-medium">Threads</h2>
@@ -83,6 +84,12 @@ export function ProjectView({ id }: { id: string }) {
     </div>
   )
 }
+
+const PULL_REQUEST_SETTINGS: Array<{ key: 'autoCreatePr' | 'archiveOnMerge' | 'autoFixCi'; label: string }> = [
+  { key: 'autoCreatePr', label: 'Open a pull request when a turn ends with commits' },
+  { key: 'archiveOnMerge', label: 'Archive the thread when its pull request is merged' },
+  { key: 'autoFixCi', label: 'Auto-fix CI on new pull requests' },
+]
 
 function Details({ project }: { project: Project }) {
   const { upsertProject } = useAppData()
@@ -147,6 +154,32 @@ function Details({ project }: { project: Project }) {
         </Button>
       </div>
     </form>
+  )
+}
+
+function PullRequestSettings({ project }: { project: Project }) {
+  const { upsertProject } = useAppData()
+
+  async function toggle(key: (typeof PULL_REQUEST_SETTINGS)[number]['key'], value: boolean): Promise<void> {
+    try {
+      upsertProject(await api.projects.update(project.id, { [key]: value }))
+    } catch (err) {
+      toast.error(errorMessage(err))
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">Pull requests</h2>
+      {PULL_REQUEST_SETTINGS.map((s) => (
+        <div key={s.key} className="flex items-center gap-2">
+          <Switch id={`project-${s.key}`} size="sm" checked={project[s.key]} onCheckedChange={(c) => void toggle(s.key, c)} />
+          <Label htmlFor={`project-${s.key}`} className="font-normal">
+            {s.label}
+          </Label>
+        </div>
+      ))}
+    </section>
   )
 }
 

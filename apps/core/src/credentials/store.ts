@@ -3,6 +3,13 @@ import type { CredentialKind, CredentialStatus } from '@valet/shared'
 import type { Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
 import { credentials } from '../db/schema.js'
+import { GitHubApp, type GitHubAppCredentials, type RepoRef } from '../git/github.js'
+import { logger } from '../logger.js'
+
+const log = logger('credentials')
+
+/** Installation tokens live an hour; re-mint one this long before it expires. */
+const TOKEN_MARGIN_MS = 5 * 60_000
 
 export type CodexAuthJson = {
   auth_mode?: string
@@ -11,10 +18,13 @@ export type CodexAuthJson = {
   last_refresh?: string
 }
 
+export type GitHubAppPayload = GitHubAppCredentials & { webhookSecret: string }
+
 export type CredentialPayload = {
   claude: { token: string }
   codex: { apiKey: string } | { authJson: CodexAuthJson }
   github: { token: string }
+  'github-app': GitHubAppPayload
 }
 
 export type StoredCredential<K extends CredentialKind> = {
@@ -25,7 +35,7 @@ export type StoredCredential<K extends CredentialKind> = {
   updatedAt: Date
 }
 
-const KINDS: CredentialKind[] = ['claude', 'codex', 'github']
+const KINDS: CredentialKind[] = ['claude', 'codex', 'github', 'github-app']
 
 /** `sk-ant-oat01-abc...9f2a` -> `sk-ant-oat…9f2a`; `ghp_abc...a1b2` -> `ghp_…a1b2`. */
 export function maskToken(token: string): string {
@@ -36,6 +46,9 @@ export function maskToken(token: string): string {
 }
 
 export class CredentialStore {
+  /** Installation tokens by `owner/repo`, lowercased. */
+  private readonly appTokens = new Map<string, { token: string; expiresAt: number }>()
+
   constructor(
     private readonly db: Db,
     private readonly cipher: Cipher,
@@ -49,7 +62,7 @@ export class CredentialStore {
         kind,
         configured: row !== undefined,
         label: row?.label ?? null,
-        method: kind === 'github' ? null : (row?.method ?? null),
+        method: kind === 'claude' || kind === 'codex' ? (row?.method ?? null) : null,
         updatedAt: row?.updatedAt.toISOString() ?? null,
       }
     })
@@ -84,11 +97,13 @@ export class CredentialStore {
       .insert(credentials)
       .values({ kind, payloadEnc, label, method, updatedAt: now })
       .onConflictDoUpdate({ target: credentials.kind, set: { payloadEnc, label, method, updatedAt: now } })
+    if (kind === 'github-app') this.appTokens.clear()
     return this.status(kind)
   }
 
   async remove(kind: CredentialKind): Promise<void> {
     await this.db.delete(credentials).where(eq(credentials.kind, kind))
+    if (kind === 'github-app') this.appTokens.clear()
   }
 
   /** Env for the Claude Code CLI, keyed by token type. */
@@ -106,9 +121,39 @@ export class CredentialStore {
     return { mode: 'oauth', authJson: cred.payload.authJson, label: cred.label }
   }
 
+  /** The personal access token; user-scoped calls (listing repositories) need it. */
   async githubToken(): Promise<string | null> {
     const cred = await this.get('github')
     return cred?.payload.token ?? null
+  }
+
+  async githubApp(): Promise<GitHubAppPayload | null> {
+    const cred = await this.get('github-app')
+    return cred?.payload ?? null
+  }
+
+  /**
+   * The token to use against one repository: the GitHub App's installation token
+   * when an App is configured and installed there, else the personal access token.
+   */
+  async githubTokenFor(ref: RepoRef): Promise<string | null> {
+    const app = await this.githubApp()
+    const installation = app ? await this.installationToken(app, ref) : null
+    return installation ?? (await this.githubToken())
+  }
+
+  private async installationToken(app: GitHubAppPayload, ref: RepoRef): Promise<string | null> {
+    const key = `${ref.owner}/${ref.repo}`.toLowerCase()
+    const cached = this.appTokens.get(key)
+    if (cached && cached.expiresAt - Date.now() > TOKEN_MARGIN_MS) return cached.token
+    this.appTokens.delete(key)
+    const issued = await new GitHubApp(app).installationToken(ref).catch((err: unknown) => {
+      log.warn('installation token failed', { repo: key, err })
+      return null
+    })
+    if (!issued) return null
+    this.appTokens.set(key, { token: issued.token, expiresAt: Date.parse(issued.expiresAt) })
+    return issued.token
   }
 }
 

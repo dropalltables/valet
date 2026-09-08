@@ -1,5 +1,5 @@
 import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
-import type { AgentKind, DiffStats, ModelOption, ModelsSource, PermissionPolicy, ProjectSource, PullRequestState, Service, Settings, ThreadStatus } from '@valet/shared'
+import type { AgentKind, CredentialKind, DiffStats, ModelOption, ModelsSource, PermissionPolicy, ProjectSource, PullRequest, Service, Settings, ThreadStatus } from '@valet/shared'
 
 export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
@@ -8,6 +8,9 @@ export const projects = pgTable('projects', {
   repoUrl: text('repo_url'),
   defaultBranch: text('default_branch').notNull(),
   hasSetupScript: boolean('has_setup_script'),
+  autoCreatePr: boolean('auto_create_pr').notNull().default(false),
+  archiveOnMerge: boolean('archive_on_merge').notNull().default(true),
+  autoFixCi: boolean('auto_fix_ci').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -25,7 +28,8 @@ export const projectEnvVars = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.name] })],
 )
 
-export type PrRow = { url: string; number: number; state: PullRequestState }
+/** The pull request as the API reports it, plus the head commit auto-fix last covered. */
+export type PrRow = PullRequest & { ciFixSha: string | null }
 /** A listening port as last reported by the sandbox; the URL is derived at read time. */
 export type StoredPortal = { port: number; name: string | null; process: string | null }
 /**
@@ -86,7 +90,7 @@ export const threadEvents = pgTable(
 )
 
 export const credentials = pgTable('credentials', {
-  kind: text('kind').$type<'claude' | 'codex' | 'github'>().primaryKey(),
+  kind: text('kind').$type<CredentialKind>().primaryKey(),
   payloadEnc: text('payload_enc').notNull(),
   label: text('label'),
   method: text('method').$type<'oauth' | 'api-key'>(),
