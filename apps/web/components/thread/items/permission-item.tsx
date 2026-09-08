@@ -16,14 +16,14 @@ function summary(input: unknown): string | null {
   return keys.length > 0 ? JSON.stringify(o, null, 2) : null
 }
 
-export function PermissionItemView({ threadId, item }: { threadId: string; item: PermissionItem }) {
+export function PermissionItemView({ threadId, item }: { threadId: string | null; item: PermissionItem }) {
   const [busy, setBusy] = useState<'allow' | 'deny' | null>(null)
   const detail = summary(item.input)
 
-  async function decide(decision: 'allow' | 'deny'): Promise<void> {
+  async function decide(id: string, decision: 'allow' | 'deny'): Promise<void> {
     setBusy(decision)
     try {
-      await api.threads.permission(threadId, item.id, { decision })
+      await api.threads.permission(id, item.id, { decision })
     } catch (err) {
       toast.error(errorMessage(err))
       setBusy(null)
@@ -49,12 +49,12 @@ export function PermissionItemView({ threadId, item }: { threadId: string; item:
           {detail}
         </pre>
       )}
-      {!item.decision && (
+      {!item.decision && threadId !== null && (
         <div className="flex gap-2">
-          <Button size="sm" onClick={() => void decide('allow')} disabled={busy !== null}>
+          <Button size="sm" onClick={() => void decide(threadId, 'allow')} disabled={busy !== null}>
             Allow
           </Button>
-          <Button size="sm" variant="outline" onClick={() => void decide('deny')} disabled={busy !== null}>
+          <Button size="sm" variant="outline" onClick={() => void decide(threadId, 'deny')} disabled={busy !== null}>
             Deny
           </Button>
         </div>

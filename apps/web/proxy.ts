@@ -15,7 +15,8 @@ const PORTAL_HOST_HEADER = 'x-valet-portal-host'
  *    VALET_CORE_URL into the build; a proxy rewrite reads it per request, and
  *    Next proxies WebSocket upgrades through the same path.
  * 3. When VALET_PASSWORD is set, page requests without a `valet_session` cookie
- *    go to /login. Core verifies the cookie; this only checks presence.
+ *    go to /login, except `/s/<token>` (an unlisted thread link, which carries its
+ *    own credential). Core verifies the cookie; this only checks presence.
  */
 export function proxy(request: NextRequest): NextResponse {
   const { pathname, search } = request.nextUrl
@@ -35,7 +36,7 @@ export function proxy(request: NextRequest): NextResponse {
 
   if (pathname.startsWith('/_next/') || pathname === '/favicon.ico') return NextResponse.next()
 
-  if (process.env.VALET_PASSWORD && pathname !== '/login' && !request.cookies.has('valet_session')) {
+  if (process.env.VALET_PASSWORD && pathname !== '/login' && !pathname.startsWith('/s/') && !request.cookies.has('valet_session')) {
     const login = new URL('/login', request.url)
     if (pathname !== '/') login.searchParams.set('next', pathname + search)
     return NextResponse.redirect(login)

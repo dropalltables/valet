@@ -1025,6 +1025,15 @@ export class ThreadService {
     return supervisor ? { kind: 'running', row, supervisor } : { kind: 'stopped', row }
   }
 
+  async shareState(id: string): Promise<{ shared: boolean; generation: number }> {
+    const row = await this.row(id)
+    return { shared: row.shared, generation: row.shareGeneration }
+  }
+
+  async setShare(id: string, state: { shared: boolean; generation: number }): Promise<void> {
+    await this.db.update(threads).set({ shared: state.shared, shareGeneration: state.generation }).where(eq(threads.id, id))
+  }
+
   async portalShare(id: string, port: number): Promise<PortalShare> {
     const row = await this.row(id)
     return row.portalShares?.[String(port)] ?? { generation: 0, expiresAt: null }

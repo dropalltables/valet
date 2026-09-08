@@ -20,6 +20,7 @@ import { ProjectService } from './projects/service.js'
 import { createApp } from './routes/index.js'
 import { SettingsService } from './settings.js'
 import { ThreadService } from './threads/service.js'
+import { ThreadShares } from './threads/share.js'
 import { attachWebSockets } from './ws/index.js'
 
 const log = logger('core')
@@ -48,6 +49,7 @@ async function main(): Promise<void> {
   })
   const portalUrls = new PortalUrls(cfg)
   const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings, portalUrls })
+  const shares = new ThreadShares(cfg, cipher, threads)
   const catalog = new ModelCatalog(db, docker, credentials)
   const deviceLogins = new DeviceLoginManager(db, docker, credentials, () => void catalog.refresh('codex'))
   const auth = new Auth(cfg, cipher)
@@ -56,11 +58,11 @@ async function main(): Promise<void> {
   auth.onLogout(() => portalAuth.revokeOwners())
   const portals = new PortalGateway({ cfg, urls: portalUrls, portalAuth, auth, threads })
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, projects, threads, portals })
+  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, projects, threads, shares, portals })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
     log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server
-  attachWebSockets(server, { auth, events, threads, portals })
+  attachWebSockets(server, { auth, events, threads, shares, portals })
 
   await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))

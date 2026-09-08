@@ -9,7 +9,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { TurnView } from '@/components/thread/turn-view'
 
 type Props = {
-  threadId: string
+  /** The thread permissions and questions are answered on; null in a read-only shared view. */
+  threadId: string | null
   transcript: Transcript
   status: ThreadStatus
   reconnecting: boolean

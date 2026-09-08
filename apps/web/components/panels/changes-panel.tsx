@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import useSWR from 'swr'
-import { LIVE_STATUSES, type ChangedFile, type ThreadListItem } from '@valet/shared'
+import { LIVE_STATUSES, type ChangedFile, type ChangesResponse, type ThreadStatus } from '@valet/shared'
 import { ChevronRightIcon } from 'lucide-react'
-import { api, ApiError } from '@/lib/api'
+import { ApiError } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -16,13 +16,25 @@ import type { ThreadActions } from '@/components/thread/thread-actions'
 
 const STATUS_LETTER: Record<ChangedFile['status'], string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R' }
 
-export function ChangesPanel({ thread, actions }: { thread: ThreadListItem; actions: ThreadActions }) {
-  const live = LIVE_STATUSES.includes(thread.status)
-  const running = thread.status === 'running'
+export function ChangesPanel({
+  status,
+  source,
+  load,
+  actions,
+}: {
+  status: ThreadStatus
+  /** Identifies the response in the cache: a thread id for the owner, a link token for a shared view. */
+  source: string
+  load: () => Promise<ChangesResponse>
+  /** Null in a shared view: read-only, with no way to wake, push, or open a pull request. */
+  actions: ThreadActions | null
+}) {
+  const live = LIVE_STATUSES.includes(status)
+  const running = status === 'running'
   const [diffStyle, setDiffStyle] = useState<DiffStyle>('unified')
   // `running` is part of the key so the turn's final edits and commit are
   // fetched when it ends, not only on the next focus.
-  const { data, error } = useSWR(live ? ['changes', thread.id, running] : null, () => api.threads.changes(thread.id), {
+  const { data, error } = useSWR(live ? ['changes', source, running] : null, load, {
     refreshInterval: running ? 5000 : 0,
     revalidateOnFocus: true,
     shouldRetryOnError: false,
@@ -30,7 +42,7 @@ export function ChangesPanel({ thread, actions }: { thread: ThreadListItem; acti
   })
 
   if (!live || (error instanceof ApiError && error.status === 409)) {
-    return <PaneState status={live ? 'paused' : thread.status} onWake={actions.wake} waking={actions.busy === 'wake'} />
+    return <PaneState status={live ? 'paused' : status} onWake={actions?.wake ?? null} waking={actions?.busy === 'wake'} />
   }
   if (error) {
     return (
@@ -70,24 +82,28 @@ export function ChangesPanel({ thread, actions }: { thread: ThreadListItem; acti
             </button>
           ))}
         </div>
-        <Button size="xs" variant="outline" disabled={!actions.canGit || actions.busy !== null} onClick={() => void actions.push()}>
-          Push
-        </Button>
-        {actions.prBlocked ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span tabIndex={0}>
-                <Button size="xs" disabled>
-                  Create PR
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>{actions.prBlocked}</TooltipContent>
-          </Tooltip>
-        ) : thread.pr ? null : (
-          <Button size="xs" disabled={!actions.canGit || actions.busy !== null} onClick={actions.openPr}>
-            Create PR
-          </Button>
+        {actions && (
+          <>
+            <Button size="xs" variant="outline" disabled={!actions.canGit || actions.busy !== null} onClick={() => void actions.push()}>
+              Push
+            </Button>
+            {actions.prBlocked ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0}>
+                    <Button size="xs" disabled>
+                      Create PR
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{actions.prBlocked}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <Button size="xs" disabled={!actions.canGit || actions.busy !== null} onClick={actions.openPr}>
+                Create PR
+              </Button>
+            )}
+          </>
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">

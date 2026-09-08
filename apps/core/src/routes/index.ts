@@ -17,6 +17,7 @@ import {
   type PushResponse,
   type SendMessageResponse,
   type ServicesResponse,
+  type SharedThreadResponse,
   type ThreadsResponse,
 } from '@valet/shared'
 import type { Auth } from '../auth.js'
@@ -34,7 +35,9 @@ import type { PortalGateway } from '../portals/gateway.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SettingsService } from '../settings.js'
 import { updateSettingsSchema } from '../settings.js'
+import { toSharedThread } from '../threads/mapper.js'
 import type { ThreadService } from '../threads/service.js'
+import type { ThreadShares } from '../threads/share.js'
 import { jsonBody, queryParams } from './validate.js'
 
 const log = logger('http')
@@ -51,6 +54,7 @@ export type AppDeps = {
   settings: SettingsService
   projects: ProjectService
   threads: ThreadService
+  shares: ThreadShares
   portals: PortalGateway
 }
 
@@ -114,6 +118,13 @@ function parseKind(raw: string): CredentialKind {
 
 export function createApp(deps: AppDeps): Hono {
   const app = new Hono()
+
+  /** The thread an unlisted link names, or 404. Every failure counts against the attempt budget. */
+  const shared = async (token: string): Promise<string> => {
+    const id = await deps.shares.resolve(token)
+    if (!id) throw notFound('thread')
+    return id
+  }
 
   app.onError((err, c) => {
     if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400)
@@ -399,6 +410,22 @@ export function createApp(deps: AppDeps): Hono {
       }),
     )
   })
+
+  // ---- sharing ---------------------------------------------------------------------------
+
+  app.get('/api/threads/:id/share', async (c) => c.json(await deps.shares.status(c.req.param('id'))))
+  app.post('/api/threads/:id/share', async (c) => c.json(await deps.shares.create(c.req.param('id'))))
+  app.delete('/api/threads/:id/share', async (c) => {
+    await deps.shares.revoke(c.req.param('id'))
+    return c.body(null, 204)
+  })
+
+  // Read-only and unauthenticated: the token in the path is the credential.
+  app.get('/api/share/:token', async (c) => {
+    const body: SharedThreadResponse = { thread: toSharedThread(await deps.threads.get(await shared(c.req.param('token')))) }
+    return c.json(body)
+  })
+  app.get('/api/share/:token/changes', async (c) => c.json(await deps.shares.changes(await shared(c.req.param('token')))))
 
   return app
 }

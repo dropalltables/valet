@@ -3,6 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useState } from 'react'
 import { LIVE_STATUSES, type Portal, type Project, type Service, type ThreadListItem } from '@valet/shared'
+import { api } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ChangesPanel } from '@/components/panels/changes-panel'
@@ -70,7 +71,7 @@ export function RightPane({
         </TabsTrigger>
       </TabsList>
       <TabsContent value="changes" className="min-h-0 flex-1">
-        <ChangesPanel thread={thread} actions={actions} />
+        <ChangesPanel status={thread.status} source={thread.id} load={() => api.threads.changes(thread.id)} actions={actions} />
       </TabsContent>
       <TabsContent value="services" className="min-h-0 flex-1">
         <ServicesPanel thread={thread} services={services} portals={portals} actions={actions} />

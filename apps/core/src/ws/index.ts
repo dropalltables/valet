@@ -9,20 +9,24 @@ import type { EventLog } from '../events/log.js'
 import { errorMessage, logger } from '../logger.js'
 import type { PortalGateway } from '../portals/gateway.js'
 import type { ThreadService } from '../threads/service.js'
+import type { ThreadShares } from '../threads/share.js'
 
 const log = logger('ws')
 
 const REPLAY_PAGE = 500
 /** Application close codes mirror the HTTP statuses the REST routes would answer. */
 const CLOSE_NOT_FOUND = 4404
+const CLOSE_FORBIDDEN = 4403
 const CLOSE_PAUSED = 4409
 const CLOSE_ERROR = 4500
 
-export type WsDeps = { auth: Auth; events: EventLog; threads: ThreadService; portals: PortalGateway }
+export type WsDeps = { auth: Auth; events: EventLog; threads: ThreadService; shares: ThreadShares; portals: PortalGateway }
 
 type Route =
   | { kind: 'global' }
   | { kind: 'stream'; id: string; since: number }
+  /** Unlisted link: the token stands in for both the session and the thread id. */
+  | { kind: 'share'; token: string; since: number }
   | { kind: 'relay'; id: string; target: 'pty' | 'vnc' }
   | { kind: 'logs'; id: string; name: string; lines: number }
   | { kind: 'portal'; threadId: string; port: string }
@@ -30,8 +34,15 @@ type Route =
 const DEFAULT_LOG_LINES = 200
 const MAX_LOG_LINES = 10_000
 
+function since(url: URL): number {
+  const value = Number(url.searchParams.get('since') ?? '0')
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
 function route(url: URL): Route | null {
   if (url.pathname === '/api/stream') return { kind: 'global' }
+  const share = /^\/api\/share\/([^/]+)\/stream$/.exec(url.pathname)
+  if (share && share[1]) return { kind: 'share', token: share[1], since: since(url) }
   const portal = /^\/portal\/([^/]+)\/([^/]+)(?:\/|$)/.exec(url.pathname)
   if (portal && portal[1] && portal[2]) return { kind: 'portal', threadId: portal[1], port: portal[2] }
   const logs = /^\/api\/threads\/([^/]+)\/services\/([^/]+)\/logs$/.exec(url.pathname)
@@ -41,10 +52,7 @@ function route(url: URL): Route | null {
   }
   const m = /^\/api\/threads\/([^/]+)\/(stream|pty|vnc)$/.exec(url.pathname)
   if (!m || !m[1]) return null
-  if (m[2] === 'stream') {
-    const since = Number(url.searchParams.get('since') ?? '0')
-    return { kind: 'stream', id: m[1], since: Number.isFinite(since) && since > 0 ? Math.floor(since) : 0 }
-  }
+  if (m[2] === 'stream') return { kind: 'stream', id: m[1], since: since(url) }
   return { kind: 'relay', id: m[1], target: m[2] as 'pty' | 'vnc' }
 }
 
@@ -74,6 +82,23 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
         })
         return
       }
+      if (target.kind === 'share') {
+        // The link token, not the session cookie, authorizes this one.
+        void deps.shares.resolve(target.token).then(
+          (id) => {
+            if (!id) {
+              reject(socket, '404 Not Found')
+              return
+            }
+            wss.handleUpgrade(req, socket, head, (ws) => void serveStream(ws, deps, id, target.since, 'shared'))
+          },
+          (err: unknown) => {
+            log.warn('share upgrade failed', { url: req.url, message: errorMessage(err) })
+            if (!socket.destroyed) reject(socket, '500 Internal Server Error')
+          },
+        )
+        return
+      }
       if (!deps.auth.authorizedUpgrade(req)) {
         reject(socket, '401 Unauthorized')
         return
@@ -84,7 +109,7 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
             serveGlobal(ws, deps)
             return
           case 'stream':
-            void serveStream(ws, deps, target.id, target.since)
+            void serveStream(ws, deps, target.id, target.since, 'owner')
             return
           case 'relay':
             void serveRelay(ws, deps, target.id, () => deps.threads.openRelay(target.id, target.target))
@@ -113,12 +138,46 @@ function serveGlobal(ws: WebSocket, deps: WsDeps): void {
   ws.on('error', unsubscribe)
 }
 
-async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: number): Promise<void> {
+/**
+ * What a link holder is allowed to see: the transcript and the thread row, minus
+ * every cost figure, the sandbox handles, and the ports and services.
+ */
+export function forShared(frame: StreamFrame): StreamFrame | null {
+  switch (frame.t) {
+    case 'thread':
+      return { t: 'thread', thread: { ...frame.thread, costUsd: null, containerId: null, agentSessionId: null } }
+    case 'event': {
+      const event = frame.event
+      // `session` names the owner's agent session; `rateLimits` is their account quota.
+      if (event.type === 'session') return null
+      if (event.type === 'usage') {
+        const { costUsd: _cost, ...usage } = event.usage
+        return { t: 'event', seq: frame.seq, event: { ...event, usage, rateLimits: null } }
+      }
+      if (event.type === 'turn.end' && event.usage) {
+        const { costUsd: _cost, ...usage } = event.usage
+        return { t: 'event', seq: frame.seq, event: { ...event, usage } }
+      }
+      return frame
+    }
+    case 'portals':
+    case 'services':
+      return null
+    default:
+      return frame
+  }
+}
+
+async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: number, visibility: 'owner' | 'shared'): Promise<void> {
+  const send = (frame: StreamFrame): void => {
+    const out = visibility === 'shared' ? forShared(frame) : frame
+    if (out) sendJson(ws, out)
+  }
   let thread
   try {
     thread = await deps.threads.get(id)
   } catch (err) {
-    sendJson(ws, { t: 'error', message: errorMessage(err) } satisfies StreamFrame)
+    send({ t: 'error', message: errorMessage(err) })
     ws.close(err instanceof HttpError && err.status === 404 ? CLOSE_NOT_FOUND : CLOSE_ERROR, errorMessage(err))
     return
   }
@@ -137,23 +196,29 @@ async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: numbe
       if (frame.seq <= lastSeq) return
       lastSeq = frame.seq
     }
-    sendJson(ws, frame)
+    send(frame)
   })
   ws.on('close', unsubscribe)
   ws.on('error', unsubscribe)
+  if (visibility === 'shared') {
+    // A revoked link must not keep streaming to whoever already had it open.
+    const detach = deps.shares.watch(id, () => ws.close(CLOSE_FORBIDDEN, 'revoked'))
+    ws.on('close', detach)
+    ws.on('error', detach)
+  }
 
   try {
     for (;;) {
       const page = await deps.events.replay(id, lastSeq, REPLAY_PAGE)
       for (const e of page.events) {
         lastSeq = e.seq
-        sendJson(ws, { t: 'event', seq: e.seq, event: e.event } satisfies StreamFrame)
+        send({ t: 'event', seq: e.seq, event: e.event })
       }
       if (!page.hasMore) break
     }
   } catch (err) {
     unsubscribe()
-    sendJson(ws, { t: 'error', message: errorMessage(err) } satisfies StreamFrame)
+    send({ t: 'error', message: errorMessage(err) })
     ws.close(CLOSE_ERROR, 'replay failed')
     return
   }
@@ -164,16 +229,18 @@ async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: numbe
       if (frame.seq <= lastSeq) continue
       lastSeq = frame.seq
     }
-    sendJson(ws, frame)
+    send(frame)
   }
   held.length = 0
   const { projectName: _p, diffStats: _d, ...row } = thread
-  sendJson(ws, { t: 'thread', thread: row } satisfies StreamFrame)
-  const portals = await deps.threads.portals(id).catch(() => [])
-  sendJson(ws, { t: 'portals', portals } satisfies StreamFrame)
-  const services = await deps.threads.services(id).catch(() => [])
-  sendJson(ws, { t: 'services', services } satisfies StreamFrame)
-  sendJson(ws, { t: 'live' } satisfies StreamFrame)
+  send({ t: 'thread', thread: row })
+  if (visibility === 'owner') {
+    const portals = await deps.threads.portals(id).catch(() => [])
+    send({ t: 'portals', portals })
+    const services = await deps.threads.services(id).catch(() => [])
+    send({ t: 'services', services })
+  }
+  send({ t: 'live' })
 }
 
 async function serveRelay(ws: WebSocket, _deps: WsDeps, id: string, open: () => Promise<WebSocket>): Promise<void> {

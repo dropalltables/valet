@@ -1,4 +1,4 @@
-import type { Portal, Thread, ThreadListItem } from '@valet/shared'
+import type { Portal, SharedThread, Thread, ThreadListItem } from '@valet/shared'
 import type { ThreadRow } from '../db/schema.js'
 import type { PortalUrls } from '../portals/urls.js'
 
@@ -26,6 +26,20 @@ export function toThread(row: ThreadRow): Thread {
 
 export function toListItem(row: ThreadRow, projectName: string): ThreadListItem {
   return { ...toThread(row), projectName, diffStats: row.diffStats ?? null }
+}
+
+/** What an unlisted link exposes: no ids, no cost, no way back into the sandbox. */
+export function toSharedThread(item: ThreadListItem): SharedThread {
+  return {
+    title: item.title,
+    projectName: item.projectName,
+    agent: item.agent,
+    model: item.model,
+    status: item.status,
+    error: item.error,
+    branch: item.branch,
+    baseBranch: item.baseBranch,
+  }
 }
 
 export function toPortals(row: ThreadRow, urls: PortalUrls, now = Date.now()): Portal[] {
