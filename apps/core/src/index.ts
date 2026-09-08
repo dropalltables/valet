@@ -21,6 +21,7 @@ import { ProjectService } from './projects/service.js'
 import { createApp } from './routes/index.js'
 import { SettingsService } from './settings.js'
 import { ThreadService } from './threads/service.js'
+import { UsageService } from './usage/service.js'
 import { attachWebSockets } from './ws/index.js'
 
 const log = logger('core')
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
   const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings, portalUrls })
   const catalog = new ModelCatalog(db, docker, credentials)
   const deviceLogins = new DeviceLoginManager(db, docker, credentials, () => void catalog.refresh('codex'))
+  const usage = new UsageService(db)
   const auth = new Auth(cfg, cipher)
   const portalAuth = new PortalAuth(cipher, auth.enabled, db)
   await portalAuth.load()
@@ -59,7 +61,7 @@ async function main(): Promise<void> {
   const notifications = new NotificationService({ db, cfg, cipher, events, settings })
   notifications.watch()
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, threads, portals })
+  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, threads, portals, usage })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
     log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server

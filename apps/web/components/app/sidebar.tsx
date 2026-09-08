@@ -88,6 +88,9 @@ export function Sidebar() {
         <Button asChild size="sm" variant={pathname.startsWith('/projects') ? 'secondary' : 'ghost'}>
           <Link href="/projects">Projects</Link>
         </Button>
+        <Button asChild size="sm" variant={pathname === '/usage' ? 'secondary' : 'ghost'}>
+          <Link href="/usage">Usage</Link>
+        </Button>
         <Button asChild size="sm" variant={pathname === '/settings' ? 'secondary' : 'ghost'}>
           <Link href="/settings">Settings</Link>
         </Button>

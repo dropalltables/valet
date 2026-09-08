@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import type { UsageRange } from '@valet/shared'
 import useSWR from 'swr'
 import { api } from './api'
 
@@ -37,4 +38,8 @@ export function useBranches(repoUrl: string | null) {
   return useSWR(owner && repo ? ['branches', owner, repo] : null, () => api.credentials.githubBranches(owner!, repo!), {
     revalidateOnFocus: false,
   })
+}
+
+export function useUsage(range: UsageRange) {
+  return useSWR(['usage', range], () => api.usage(range), { revalidateOnFocus: false })
 }

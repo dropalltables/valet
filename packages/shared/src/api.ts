@@ -37,7 +37,7 @@ import type {
   ThreadStatus,
   WebhookKind,
 } from './domain.js'
-import type { StoredEvent } from './events.js'
+import type { RateLimitInfo, StoredEvent } from './events.js'
 import type { CreateServiceRequest } from './supervisor.js'
 
 // ---------------------------------------------------------------------------
@@ -334,6 +334,54 @@ export const PORTAL_WAKE_PATH = '/__valet/wake'
 export type ServicesResponse = { services: Service[] }
 export type { CreateServiceRequest }
 export type CreateServiceResponse = { service: Service; readiness: ServiceReadiness }
+
+// ---------------------------------------------------------------------------
+// Usage
+// ---------------------------------------------------------------------------
+
+/** `7d` and `30d` are calendar days in UTC, ending with today; `all` starts at the first turn. */
+export type UsageRange = '7d' | '30d' | 'all'
+export const USAGE_RANGES = ['7d', '30d', 'all'] as const satisfies readonly UsageRange[]
+
+/**
+ * Rolled up from `turn.end` events. `costUsd` is null when no turn in the group
+ * reported one: Codex does not report cost, so a Codex-only group is "not tracked",
+ * which is not the same as $0.00.
+ */
+export type UsageTotals = {
+  costUsd: number | null
+  inputTokens: number
+  outputTokens: number
+  turns: number
+  threads: number
+}
+
+export type UsageByProject = UsageTotals & { projectId: string; projectName: string }
+export type UsageByModel = UsageTotals & { agent: AgentKind; model: string }
+/** Buckets of the `daily` series; `all` switches to `week` once it spans more than 90 days. */
+export type UsageBucket = 'day' | 'week'
+/** `day` is `YYYY-MM-DD` in UTC: the day, or the Monday of the week when the bucket is `week`. Buckets without turns are present with zeros. */
+export type UsageDay = UsageTotals & { day: string }
+/** The most recent rate-limit window an agent reported, across all of its threads; windows past their reset are dropped. */
+export type UsageRateLimit = RateLimitInfo & { agent: AgentKind; observedAt: string }
+
+/**
+ * GET /api/usage?range=7d|30d|all
+ *
+ * A thread's turns are attributed to the thread's current project, agent, and model;
+ * changing a thread's model moves its whole history to the new one.
+ */
+export type UsageResponse = {
+  range: UsageRange
+  /** Start of the range, null for `all`. */
+  since: string | null
+  totals: UsageTotals
+  byProject: UsageByProject[]
+  byModel: UsageByModel[]
+  bucket: UsageBucket
+  daily: UsageDay[]
+  rateLimits: UsageRateLimit[]
+}
 
 // ---------------------------------------------------------------------------
 // WebSockets

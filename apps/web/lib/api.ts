@@ -46,6 +46,8 @@ import type {
   UpdateProjectRequest,
   UpdateSettingsRequest,
   UpdateThreadRequest,
+  UsageRange,
+  UsageResponse,
 } from '@valet/shared'
 
 export class ApiError extends Error {
@@ -187,6 +189,7 @@ export const api = {
     createPr: (id: string, body: CreatePrRequest) =>
       request<Thread>(`/api/threads/${id}/pr`, { method: 'POST', body: json(body) }),
   },
+  usage: (range: UsageRange) => request<UsageResponse>(`/api/usage${q({ range })}`),
 }
 
 export function wsUrl(path: string): string {
