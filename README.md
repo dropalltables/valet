@@ -108,7 +108,9 @@ Commit these to the repository:
 - `.valet/resume`: runs every time the container wakes, for one-off work that is not a service.
 
 Project environment variables and secrets are set in the project's settings page and
-are available to the scripts, the services, and the agent.
+are available to the scripts, the services, and the agent. Values of variables marked
+*Secret* are replaced with `[REDACTED:valet]` in the transcript before it is stored;
+the project's *Redact secret values in the transcript* switch turns that off.
 
 ### Services
 
@@ -160,6 +162,7 @@ valet portal 8000            # the portal URL for any port
 | `VALET_IDLE_PAUSE_MINUTES` | `10` | Idle time before a container is stopped |
 | `VALET_SANDBOX_MEMORY` | `4g` | Memory limit per sandbox |
 | `VALET_SANDBOX_CPUS` | `2` | CPU limit per sandbox |
+| `VALET_SANDBOX_PIDS` | `2048` | Process limit per sandbox |
 | `VALET_MAX_RUNNING_SANDBOXES` | `8` | Running containers before new threads queue |
 
 ## Development
@@ -182,6 +185,26 @@ Core needs the Docker socket and the sandbox image (`docker compose --profile sa
   respect to the repository it was given, and nothing else.
 - Credentials are encrypted at rest with `VALET_SECRET_KEY` and injected into agent
   processes as environment variables at spawn time, never written into the image.
+- Sandboxes run with no swap (`MemorySwap` equal to the memory limit), a process
+  limit (`VALET_SANDBOX_PIDS`), and without the `NET_RAW`, `AUDIT_WRITE`, `MKNOD`,
+  and `SYS_PTRACE` capabilities, so raw sockets (`ping`), device nodes, and process
+  tracing are unavailable inside a thread. `no-new-privileges` and a read-only root
+  filesystem are deliberately not set: both break `sudo` and `sudo apt-get install`,
+  which threads are meant to be able to use.
+- When a sandbox exceeds its memory limit the kernel kills the process that asked for
+  the memory, usually the agent or a build it started. The thread goes to *Error* with
+  the limit in the message and Wake starts it again.
+- Blocking the cloud metadata address needs a host rule, because a container cannot
+  be denied a route it can reach and nothing inside it may change the network. On a
+  cloud instance, add it once (it does not survive a reboot unless the distribution
+  persists iptables):
+
+  ```sh
+  iptables -I DOCKER-USER -d 169.254.169.254/32 -j DROP
+  ```
+
+  On AWS, `--http-tokens required --http-put-response-hop-limit 1` on the instance's
+  metadata options achieves the same thing for every container.
 
 ## License
 

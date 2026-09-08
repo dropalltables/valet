@@ -1,5 +1,5 @@
 import Docker from 'dockerode'
-import type { SandboxImageStatus } from '@valet/shared'
+import type { SandboxImageStatus, SandboxUsage } from '@valet/shared'
 import { PORTAL_ENV, SANDBOX } from '@valet/shared'
 import type { Config } from '../config.js'
 import { statusOf } from '../errors.js'
@@ -21,7 +21,75 @@ export type SandboxSpec = {
   portalUrlTemplate: string
 }
 
-export type ContainerState = { id: string; running: boolean; status: string; ip: string | null; imageId: string }
+export type ContainerState = {
+  id: string
+  running: boolean
+  status: string
+  ip: string | null
+  imageId: string
+  /** The kernel OOM-killed something in the container since it started. */
+  oomKilled: boolean
+  /** Exit status of the last run; 0 while the container has never stopped. */
+  exitCode: number
+}
+
+/**
+ * Whether the container is gone because it exceeded its memory limit. `OOMKilled`
+ * alone is not enough: the cgroup is not killed as a group here, so one build step
+ * being OOM-killed sets the flag for the rest of that run while the container keeps
+ * running (a later `docker start` clears it). Exit 137 is SIGKILL, which is also what
+ * a `docker stop` whose timeout expired produces, so the caller must already know the
+ * container was not stopped on purpose.
+ */
+export function diedOfMemory(state: ContainerState): boolean {
+  return !state.running && state.oomKilled && state.exitCode === 137
+}
+
+type CpuSample = {
+  cpu_usage: { total_usage: number; percpu_usage?: number[] }
+  system_cpu_usage?: number
+  online_cpus?: number
+}
+
+/** The parts of a `docker stats` sample that are read here; which ones the daemon sends depends on the cgroup version. */
+export type StatsSample = {
+  memory_stats: { usage?: number; stats?: { inactive_file?: number; total_inactive_file?: number } }
+  cpu_stats: CpuSample
+  precpu_stats: CpuSample
+}
+
+/**
+ * The numbers `docker stats` prints, from one sample. Memory drops the page cache,
+ * which `usage` includes (cgroup v1 reports it as `total_inactive_file`, v2 as
+ * `inactive_file`): a sandbox that cloned a repo and installed its dependencies would
+ * otherwise read near its limit forever, since cache is only reclaimed under pressure.
+ */
+export function toUsage(s: StatsSample): SandboxUsage {
+  const usage = s.memory_stats.usage ?? 0
+  const cache = s.memory_stats.stats?.total_inactive_file ?? s.memory_stats.stats?.inactive_file ?? 0
+  const cpuDelta = s.cpu_stats.cpu_usage.total_usage - s.precpu_stats.cpu_usage.total_usage
+  const systemDelta = (s.cpu_stats.system_cpu_usage ?? 0) - (s.precpu_stats.system_cpu_usage ?? 0)
+  const cores = s.cpu_stats.online_cpus || s.cpu_stats.cpu_usage.percpu_usage?.length || 1
+  const cpuPercent = systemDelta > 0 && cpuDelta > 0 ? (cpuDelta / systemDelta) * cores * 100 : 0
+  return { memoryBytes: cache < usage ? usage - cache : usage, cpuPercent: Math.round(cpuPercent) }
+}
+
+/**
+ * Capabilities removed from Docker's default set. The rest stay: `apt-get` and its
+ * maintainer scripts need CHOWN/DAC_OVERRIDE/FOWNER/FSETID/SETFCAP, `sudo` needs
+ * SETUID/SETGID, supervisord needs KILL, dev servers may bind low ports with
+ * NET_BIND_SERVICE. Dropping NET_RAW removes raw sockets, so a `ping` installed
+ * into a thread will not work.
+ *
+ * Not set here on purpose: `no-new-privileges` (breaks the `sudo` the agent needs)
+ * and a read-only rootfs (`apt-get install` inside a thread is a supported workflow).
+ * Blocking the cloud metadata address needs a host rule; see the README.
+ */
+const CAP_DROP = ['NET_RAW', 'AUDIT_WRITE', 'MKNOD', 'SYS_PTRACE']
+
+const HELPER_MEMORY = 1024 * 1024 * 1024
+/** A helper runs one CLI command, never a desktop. */
+const HELPER_PIDS = 512
 
 export class DockerClient {
   readonly docker: Docker
@@ -107,7 +175,11 @@ export class DockerClient {
         NetworkMode: this.cfg.VALET_DOCKER_NETWORK,
         Binds: [`${spec.volume}:${SANDBOX.home}`, this.reposBind()],
         Memory: this.cfg.VALET_SANDBOX_MEMORY,
+        // Equal to Memory means no swap, so a runaway process is OOM-killed instead of thrashing.
+        MemorySwap: this.cfg.VALET_SANDBOX_MEMORY,
         NanoCpus: Math.round(this.cfg.VALET_SANDBOX_CPUS * 1e9),
+        PidsLimit: this.cfg.VALET_SANDBOX_PIDS,
+        CapDrop: CAP_DROP,
         ShmSize: 1024 * 1024 * 1024,
         Init: true,
         RestartPolicy: { Name: 'no' },
@@ -127,8 +199,11 @@ export class DockerClient {
       Labels: { [LABEL_HELPER]: 'true' },
       HostConfig: {
         NetworkMode: this.cfg.VALET_DOCKER_NETWORK,
-        Memory: 1024 * 1024 * 1024,
+        Memory: HELPER_MEMORY,
+        MemorySwap: HELPER_MEMORY,
         NanoCpus: 1e9,
+        PidsLimit: HELPER_PIDS,
+        CapDrop: CAP_DROP,
         Init: true,
         RestartPolicy: { Name: 'no' },
         AutoRemove: false,
@@ -174,9 +249,30 @@ export class DockerClient {
       const info = await this.docker.getContainer(id).inspect()
       const net = info.NetworkSettings.Networks[this.cfg.VALET_DOCKER_NETWORK]
       const ip = net?.IPAddress || Object.values(info.NetworkSettings.Networks)[0]?.IPAddress || null
-      return { id: info.Id, running: info.State.Running, status: info.State.Status, ip, imageId: info.Image }
+      return {
+        id: info.Id,
+        running: info.State.Running,
+        status: info.State.Status,
+        ip,
+        imageId: info.Image,
+        oomKilled: info.State.OOMKilled,
+        exitCode: info.State.ExitCode,
+      }
     } catch (err) {
       if (statusOf(err) === 404) return null
+      throw err
+    }
+  }
+
+  /**
+   * One `docker stats` sample. The non-streaming form carries the previous CPU
+   * sample too, which is what the percentage is computed against.
+   */
+  async stats(id: string): Promise<SandboxUsage | null> {
+    try {
+      return toUsage(await this.docker.getContainer(id).stats({ stream: false }))
+    } catch (err) {
+      if (statusOf(err) === 404 || statusOf(err) === 409) return null
       throw err
     }
   }

@@ -28,6 +28,7 @@ import type {
   Portal,
   Project,
   ProjectEnvVar,
+  SandboxUsage,
   Service,
   ServiceReadiness,
   Settings,
@@ -134,8 +135,8 @@ export type CreateProjectRequest =
   | { source: 'github'; repoUrl: string; defaultBranch?: string; name?: string }
   | { source: 'blank'; name: string }
 
-/** GET /api/projects/:id -> Project ; PATCH /api/projects/:id { name?, defaultBranch? } ; DELETE -> 204 (fails 409 while threads exist unless ?force=1) */
-export type UpdateProjectRequest = { name?: string; defaultBranch?: string }
+/** GET /api/projects/:id -> Project ; PATCH /api/projects/:id { name?, defaultBranch?, redactSecrets? } ; DELETE -> 204 (fails 409 while threads exist unless ?force=1) */
+export type UpdateProjectRequest = { name?: string; defaultBranch?: string; redactSecrets?: boolean }
 
 /** GET /api/projects/:id/env -> { vars } ; PUT /api/projects/:id/env { vars: [{name, value, kind}] } replaces all ; values omitted keep existing */
 export type ProjectEnvResponse = { vars: ProjectEnvVar[] }
@@ -322,6 +323,8 @@ export type StreamFrame =
   | { t: 'portals'; portals: Portal[] }
   /** Full current list, sent once after replay and on every poll while the sandbox runs. */
   | { t: 'services'; services: Service[] }
+  /** Memory and CPU of the running container, sampled every 10 s while anyone watches. */
+  | { t: 'usage'; usage: SandboxUsage }
   | { t: 'error'; message: string }
 
 /**

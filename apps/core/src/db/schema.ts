@@ -8,6 +8,7 @@ export const projects = pgTable('projects', {
   repoUrl: text('repo_url'),
   defaultBranch: text('default_branch').notNull(),
   hasSetupScript: boolean('has_setup_script'),
+  redactSecrets: boolean('redact_secrets').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

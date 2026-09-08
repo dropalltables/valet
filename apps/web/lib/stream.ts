@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { emptyTranscript, reduceEvent, type Portal, type Service, type StreamFrame, type Thread, type Transcript } from '@valet/shared'
+import { LIVE_STATUSES, emptyTranscript, reduceEvent, type Portal, type SandboxUsage, type Service, type StreamFrame, type Thread, type Transcript } from '@valet/shared'
 import { wsUrl } from './api'
 
 export type StreamState = {
@@ -12,6 +12,8 @@ export type StreamState = {
   portals: Portal[]
   /** Managed services; replaced whole on every `services` frame. */
   services: Service[]
+  /** Last resource sample of the running container; null until one arrives. */
+  usage: SandboxUsage | null
   /** Replay finished; events now arrive as they happen. */
   live: boolean
   connected: boolean
@@ -24,7 +26,7 @@ const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 15000
 
 function initial(): StreamState {
-  return { transcript: emptyTranscript(), thread: null, portals: [], services: [], live: false, connected: false, everConnected: false, error: null }
+  return { transcript: emptyTranscript(), thread: null, portals: [], services: [], usage: null, live: false, connected: false, everConnected: false, error: null }
 }
 
 /**
@@ -70,13 +72,17 @@ export function useThreadStream(threadId: string): StreamState {
             setState((s) => ({ ...s, live: true }))
             return
           case 'thread':
-            setState((s) => ({ ...s, thread: frame.thread }))
+            // A paused sandbox has no usage; keeping the last sample would show it as current after a wake.
+            setState((s) => ({ ...s, thread: frame.thread, usage: LIVE_STATUSES.includes(frame.thread.status) ? s.usage : null }))
             return
           case 'portals':
             setState((s) => ({ ...s, portals: frame.portals }))
             return
           case 'services':
             setState((s) => ({ ...s, services: frame.services }))
+            return
+          case 'usage':
+            setState((s) => ({ ...s, usage: frame.usage }))
             return
           case 'error':
             setState((s) => ({ ...s, error: frame.message }))

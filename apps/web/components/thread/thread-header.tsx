@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState, type KeyboardEvent } from 'react'
-import { AGENT_LABELS, type Project, type ThreadListItem } from '@valet/shared'
+import { AGENT_LABELS, formatBytes, type Project, type SandboxUsage, type ThreadListItem } from '@valet/shared'
 import { MoreHorizontalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
@@ -29,6 +29,8 @@ type Props = {
   thread: ThreadListItem
   project: Project | undefined
   costUsd: number | null
+  /** Sampled while the sandbox runs; null when it is not. */
+  usage: SandboxUsage | null
   actions: ThreadActions
   serviceCount: number
   onOpenServices: () => void
@@ -36,7 +38,7 @@ type Props = {
 
 const PR_STATE: Record<'open' | 'merged' | 'closed', string> = { open: 'Open', merged: 'Merged', closed: 'Closed' }
 
-export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, onOpenServices }: Props) {
+export function ThreadHeader({ thread, project, costUsd, usage, actions, serviceCount, onOpenServices }: Props) {
   const router = useRouter()
   const { upsertThread, removeThread } = useAppData()
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -91,7 +93,7 @@ export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, 
                 Pause
               </DropdownMenuItem>
             )}
-            {thread.status === 'paused' && (
+            {(thread.status === 'paused' || thread.status === 'error') && (
               <DropdownMenuItem disabled={disabled} onSelect={actions.wake}>
                 Wake
               </DropdownMenuItem>
@@ -125,6 +127,12 @@ export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, 
         </span>
         <span>{thread.permissions === 'ask' ? 'Ask' : 'Auto'}</span>
         {cost && <span className="tabular-nums">{cost}</span>}
+        {usage && (
+          <>
+            <span className="tabular-nums">{formatBytes(usage.memoryBytes)}</span>
+            <span className="tabular-nums">{usage.cpuPercent}% CPU</span>
+          </>
+        )}
         {serviceCount > 0 && (
           <button type="button" onClick={onOpenServices} className="tabular-nums hover:text-foreground">
             {serviceCount} {serviceCount === 1 ? 'service' : 'services'}

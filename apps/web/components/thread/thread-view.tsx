@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import type { Project, ThreadListItem } from '@valet/shared'
+import { LIVE_STATUSES, type Project, type ThreadListItem } from '@valet/shared'
 import { api, ApiError, errorMessage } from '@/lib/api'
 import { useThreadStream, type StreamState } from '@/lib/stream'
 import { Button } from '@/components/ui/button'
@@ -71,6 +71,7 @@ function ThreadBody({
         thread={thread}
         project={project}
         costUsd={stream.transcript.totalCostUsd || thread.costUsd}
+        usage={LIVE_STATUSES.includes(thread.status) ? stream.usage : null}
         actions={actions}
         serviceCount={stream.services.length}
         onOpenServices={() => setTab('services')}

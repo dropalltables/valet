@@ -106,6 +106,8 @@ export type Project = {
   defaultBranch: string
   /** Whether the repo has a `.valet/setup` script (detected on first clone). */
   hasSetupScript: boolean | null
+  /** Replace `secret` environment values with `[REDACTED:valet]` in persisted events. */
+  redactSecrets: boolean
   createdAt: string
   updatedAt: string
 }
@@ -146,6 +148,14 @@ export type Thread = {
   lastActivityAt: string
   createdAt: string
   archivedAt: string | null
+}
+
+/** Container resource use as `docker stats` reports it, sampled while the sandbox runs. */
+export type SandboxUsage = {
+  /** Resident memory, page cache excluded, as `docker stats` reports it. */
+  memoryBytes: number
+  /** Whole percent across all cores, as `docker stats` computes it: 200 means two cores saturated. */
+  cpuPercent: number
 }
 
 /**
@@ -339,6 +349,19 @@ export function slugify(input: string): string {
       .slice(0, 40)
       .replace(/-+$/g, '') || 'thread'
   )
+}
+
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const
+
+/** Binary units, one fraction digit below 10 so a sampled value stays steady: `486 MB`, `1.2 GB`, `4 GB`. */
+export function formatBytes(bytes: number): string {
+  let n = Math.max(0, bytes)
+  let unit = 0
+  while (n >= 1024 && unit < BYTE_UNITS.length - 1) {
+    n /= 1024
+    unit += 1
+  }
+  return `${unit === 0 || n >= 10 ? Math.round(n) : Number(n.toFixed(1))} ${BYTE_UNITS[unit]}`
 }
 
 /** Sandbox-side filesystem layout. Fixed so every component can rely on it. */

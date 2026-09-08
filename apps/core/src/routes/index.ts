@@ -67,7 +67,11 @@ const createProjectSchema = z.discriminatedUnion('source', [
   }),
   z.object({ source: z.literal('blank'), name: z.string().min(1) }),
 ])
-const updateProjectSchema = z.object({ name: z.string().optional(), defaultBranch: z.string().optional() })
+const updateProjectSchema = z.object({
+  name: z.string().optional(),
+  defaultBranch: z.string().optional(),
+  redactSecrets: z.boolean().optional(),
+})
 const putEnvSchema = z.object({
   vars: z.array(z.object({ name: z.string(), value: z.string().optional(), kind: z.enum(['plain', 'secret']) })),
 })

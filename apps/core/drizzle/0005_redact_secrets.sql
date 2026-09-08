@@ -1,0 +1,1 @@
+ALTER TABLE "projects" ADD COLUMN "redact_secrets" boolean DEFAULT true NOT NULL;
