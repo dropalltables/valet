@@ -1,0 +1,106 @@
+import { bigint, bigserial, boolean, doublePrecision, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
+import type { AgentKind, DiffStats, PermissionPolicy, ProjectSource, PullRequestState, Settings, ThreadStatus } from '@valet/shared'
+
+export const projects = pgTable('projects', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  source: text('source').$type<ProjectSource>().notNull(),
+  repoUrl: text('repo_url'),
+  defaultBranch: text('default_branch').notNull(),
+  hasSetupScript: boolean('has_setup_script'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const projectEnvVars = pgTable(
+  'project_env_vars',
+  {
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    valueEnc: text('value_enc').notNull(),
+    kind: text('kind').$type<'plain' | 'secret'>().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.name] })],
+)
+
+export type PrRow = { url: string; number: number; state: PullRequestState }
+
+export const threads = pgTable(
+  'threads',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id),
+    title: text('title').notNull(),
+    agent: text('agent').$type<AgentKind>().notNull(),
+    model: text('model').notNull(),
+    permissions: text('permissions').$type<PermissionPolicy>().notNull(),
+    status: text('status').$type<ThreadStatus>().notNull(),
+    error: text('error'),
+    branch: text('branch').notNull(),
+    baseBranch: text('base_branch').notNull(),
+    containerId: text('container_id'),
+    volumeName: text('volume_name').notNull(),
+    supervisorTokenEnc: text('supervisor_token_enc').notNull(),
+    agentSessionId: text('agent_session_id'),
+    pr: jsonb('pr').$type<PrRow>(),
+    costUsd: doublePrecision('cost_usd'),
+    diffStats: jsonb('diff_stats').$type<DiffStats>(),
+    firstPrompt: text('first_prompt').notNull(),
+    /** Set once the repo is cloned and the branch exists on the home volume. */
+    repoReady: boolean('repo_ready').notNull().default(false),
+    lastActivityAt: timestamp('last_activity_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+  },
+  (t) => [index('threads_project_idx').on(t.projectId), index('threads_status_idx').on(t.status)],
+)
+
+export const threadEvents = pgTable(
+  'thread_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    threadId: text('thread_id')
+      .notNull()
+      .references(() => threads.id, { onDelete: 'cascade' }),
+    seq: bigint('seq', { mode: 'number' }).notNull(),
+    type: text('type').notNull(),
+    payload: jsonb('payload').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('thread_events_thread_seq_idx').on(t.threadId, t.seq)],
+)
+
+export const credentials = pgTable('credentials', {
+  kind: text('kind').$type<'claude' | 'codex' | 'github'>().primaryKey(),
+  payloadEnc: text('payload_enc').notNull(),
+  label: text('label'),
+  method: text('method').$type<'oauth' | 'api-key'>(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const settings = pgTable('settings', {
+  id: text('id').primaryKey(),
+  data: jsonb('data').$type<Partial<Settings>>().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const deviceLogins = pgTable('device_logins', {
+  id: text('id').primaryKey(),
+  status: text('status').$type<'pending' | 'complete' | 'failed' | 'expired'>().notNull(),
+  verificationUrl: text('verification_url').notNull(),
+  userCode: text('user_code').notNull(),
+  error: text('error'),
+  containerId: text('container_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export type ProjectRow = typeof projects.$inferSelect
+export type ThreadRow = typeof threads.$inferSelect
+export type ThreadEventRow = typeof threadEvents.$inferSelect
+export type CredentialRow = typeof credentials.$inferSelect
+export type DeviceLoginRow = typeof deviceLogins.$inferSelect
