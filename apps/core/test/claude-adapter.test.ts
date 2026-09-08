@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { after, before, test } from 'node:test'
 import type { ThreadEvent } from '@valet/shared'
 import { ClaudeAdapter } from '../src/agents/claude.js'
@@ -13,6 +14,7 @@ import { fakeCli, recorder, types } from './helpers.js'
  */
 const FAKE_CLAUDE = String.raw`
 const readline = require('node:readline')
+if (process.env.VALET_TEST_ARGV) require('node:fs').writeFileSync(process.env.VALET_TEST_ARGV, JSON.stringify(process.argv.slice(2)))
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\n')
 const rl = readline.createInterface({ input: process.stdin })
 let turn = 0
@@ -86,8 +88,29 @@ const startOptions = (rec: ReturnType<typeof recorder>) => ({
   permissions: 'ask' as const,
   env: { PATH: process.env.PATH ?? '' },
   resumeSessionId: null,
+  mcpConfigPath: null,
   systemPromptSuffix: 'test',
   ...rec,
+})
+
+test('claude: valet mcp config is the only server source', async (t) => {
+  const argvFile = path.join(cli.dir, 'argv.json')
+  const rec = recorder()
+  const adapter = new ClaudeAdapter(cli.exe)
+  t.after(() => adapter.stop())
+  await adapter.start({
+    ...startOptions(rec),
+    mcpConfigPath: '/home/valet/.valet/mcp.json',
+    env: { PATH: process.env.PATH ?? '', VALET_TEST_ARGV: argvFile },
+  })
+  await adapter.sendTurn('t1', 'hi', [], 'queue')
+  await rec.waitFor('turn.end')
+  await adapter.stop()
+
+  const argv = JSON.parse(await fs.readFile(argvFile, 'utf8')) as string[]
+  assert.equal(argv[argv.indexOf('--mcp-config') + 1], '/home/valet/.valet/mcp.json')
+  // Without this the CLI also loads the repository's .mcp.json, user scope and connectors.
+  assert.ok(argv.includes('--strict-mcp-config'))
 })
 
 test('claude: text deltas, tool start/input/output, usage, turn.end', async (t) => {

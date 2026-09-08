@@ -18,6 +18,9 @@ import type {
   GitHubReposResponse,
   Health,
   LoginRequest,
+  McpServer,
+  McpServerInput,
+  McpServersResponse,
   NotificationTestResponse,
   NotificationsResponse,
   PermissionDecisionRequest,
@@ -147,6 +150,12 @@ export const api = {
       put: (id: string, body: PutProjectEnvRequest) =>
         request<ProjectEnvResponse>(`/api/projects/${id}/env`, { method: 'PUT', body: json(body) }),
     },
+  },
+  mcpServers: {
+    list: () => request<McpServersResponse>('/api/mcp-servers'),
+    create: (body: McpServerInput) => request<McpServer>('/api/mcp-servers', { method: 'POST', body: json(body) }),
+    update: (id: string, body: McpServerInput) => request<McpServer>(`/api/mcp-servers/${id}`, { method: 'PUT', body: json(body) }),
+    remove: (id: string) => request<void>(`/api/mcp-servers/${id}`, { method: 'DELETE' }),
   },
   threads: {
     list: (archived: boolean) => request<ThreadsResponse>(`/api/threads${q({ archived: archived ? 1 : 0 })}`),

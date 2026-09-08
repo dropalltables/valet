@@ -3,6 +3,8 @@ import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, p
 import type {
   AgentKind,
   DiffStats,
+  McpServerScope,
+  McpServerType,
   ModelOption,
   ModelsSource,
   NotificationEvent,
@@ -45,6 +47,39 @@ export const projectEnvVars = pgTable(
     kind: text('kind').$type<'plain' | 'secret'>().notNull(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.name] })],
+)
+
+/**
+ * MCP servers written into every sandbox they apply to. `valuesEnc` is the
+ * encrypted header map (http) or environment map (stdio); it never leaves core
+ * except as 0600 files inside a sandbox.
+ */
+export const mcpServers = pgTable('mcp_servers', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  type: text('type').$type<McpServerType>().notNull(),
+  url: text('url'),
+  command: text('command'),
+  args: jsonb('args').$type<string[]>().notNull(),
+  valuesEnc: text('values_enc').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  scope: text('scope').$type<McpServerScope>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** Which projects a `selected`-scope server applies to. */
+export const mcpServerProjects = pgTable(
+  'mcp_server_projects',
+  {
+    serverId: text('server_id')
+      .notNull()
+      .references(() => mcpServers.id, { onDelete: 'cascade' }),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.serverId, t.projectId] })],
 )
 
 export type PrRow = { url: string; number: number; state: PullRequestState }
@@ -191,3 +226,4 @@ export type DeviceLoginRow = typeof deviceLogins.$inferSelect
 export type ModelCatalogRow = typeof modelCatalog.$inferSelect
 export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect
 export type WebhookRow = typeof webhooks.$inferSelect
+export type McpServerRow = typeof mcpServers.$inferSelect

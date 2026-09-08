@@ -4,6 +4,7 @@ import type { ExecSocket, SupervisorClient } from '../docker/supervisor-client.j
 import type { CodexAuthJson, CredentialStore } from '../credentials/store.js'
 import { withAskpass } from '../git/askpass.js'
 import { git, type GitRunner } from '../git/changes.js'
+import { claudeMcpConfig, codexConfigToml, type ResolvedMcpServer } from '../mcp/config.js'
 import { errorMessage } from '../logger.js'
 
 export const ENV_FILE = `${SANDBOX.home}/.valet/env`
@@ -266,21 +267,51 @@ export async function runServicesEnsure(supervisor: SupervisorClient, exec: Exec
   }
 }
 
-const CODEX_CONFIG = [
-  'check_for_update_on_startup = false',
-  'cli_auth_credentials_store = "file"',
-  '',
-  '[analytics]',
-  'enabled = false',
-  '',
-  `[projects."${SANDBOX.repo}"]`,
-  'trust_level = "trusted"',
-  '',
-].join('\n')
+/**
+ * The `mcpServers` the repository declares in `.mcp.json`. Claude Code would load
+ * them itself, without an approval prompt under `-p`, so Valet reads the file and
+ * merges it only when the operator turned that on; the launch always runs with
+ * `--strict-mcp-config`.
+ */
+async function projectMcpServers(supervisor: SupervisorClient, sink: LogSink): Promise<Record<string, unknown>> {
+  const raw = await supervisor.fsRead(SANDBOX.projectMcpJson)
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw.toString('utf8')) as { mcpServers?: Record<string, unknown> }
+    return parsed.mcpServers ?? {}
+  } catch (err) {
+    sink('warn', `ignoring ${SANDBOX.projectMcpJson}: ${errorMessage(err)}`)
+    return {}
+  }
+}
 
-export async function writeCodexHome(supervisor: SupervisorClient, authJson: CodexAuthJson | null): Promise<void> {
+/**
+ * Writes the MCP config Claude Code launches with, and returns its path or null
+ * when there is nothing to load.
+ */
+export async function writeClaudeMcpConfig(
+  supervisor: SupervisorClient,
+  servers: ResolvedMcpServer[],
+  allowProjectMcpJson: boolean,
+  sink: LogSink,
+): Promise<string | null> {
+  const fromRepo = allowProjectMcpJson ? await projectMcpServers(supervisor, sink) : {}
+  if (servers.length === 0 && Object.keys(fromRepo).length === 0) {
+    // A server may have been removed since the last launch; its secrets go with it.
+    await supervisor.run({ argv: ['rm', '-f', SANDBOX.mcpConfig] })
+    return null
+  }
+  await supervisor.fsWrite(SANDBOX.mcpConfig, claudeMcpConfig(servers, fromRepo), '600')
+  return SANDBOX.mcpConfig
+}
+
+export async function writeCodexHome(
+  supervisor: SupervisorClient,
+  authJson: CodexAuthJson | null,
+  mcpServers: ResolvedMcpServer[],
+): Promise<void> {
   await supervisor.fsMkdir(SANDBOX.codexHome)
-  await supervisor.fsWrite(`${SANDBOX.codexHome}/config.toml`, CODEX_CONFIG, '600')
+  await supervisor.fsWrite(`${SANDBOX.codexHome}/config.toml`, codexConfigToml(mcpServers), '600')
   if (authJson) await supervisor.fsWrite(`${SANDBOX.codexHome}/auth.json`, `${JSON.stringify(authJson, null, 2)}\n`, '600')
   else await supervisor.run({ argv: ['rm', '-f', `${SANDBOX.codexHome}/auth.json`] })
 }

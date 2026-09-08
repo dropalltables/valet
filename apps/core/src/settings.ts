@@ -21,6 +21,7 @@ export const updateSettingsSchema = z
     defaultAgent: z.enum(['claude', 'codex']),
     defaultModel: z.object({ claude: z.string().min(1), codex: z.string().min(1) }).partial(),
     defaultPermissions: z.enum(['auto', 'ask']),
+    allowProjectMcpJson: z.boolean(),
   })
   .partial()
 
@@ -39,6 +40,7 @@ export class SettingsService {
       defaultAgent: 'claude',
       defaultModel: { ...DEFAULT_MODEL },
       defaultPermissions: 'auto',
+      allowProjectMcpJson: false,
     }
   }
 
@@ -63,6 +65,7 @@ export class SettingsService {
       idlePauseMinutes: patch.idlePauseMinutes ?? current.idlePauseMinutes,
       defaultAgent: patch.defaultAgent ?? current.defaultAgent,
       defaultPermissions: patch.defaultPermissions ?? current.defaultPermissions,
+      allowProjectMcpJson: patch.allowProjectMcpJson ?? current.allowProjectMcpJson,
       defaultModel,
     }
     await this.db

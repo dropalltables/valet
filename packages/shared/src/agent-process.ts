@@ -47,4 +47,9 @@ export type AdapterStartOptions = {
   resumeSessionId: string | null
   /** Extra instructions appended to the agent's system prompt. */
   systemPromptSuffix: string
+  /**
+   * Valet's generated MCP config in the sandbox, or null when no server applies.
+   * Claude Code takes it as a flag; Codex reads its servers from `config.toml`.
+   */
+  mcpConfigPath: string | null
 }

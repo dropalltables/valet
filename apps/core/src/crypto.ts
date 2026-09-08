@@ -43,6 +43,12 @@ export function timingSafeEqualStrings(a: string, b: string): boolean {
   return ba.length === bb.length && crypto.timingSafeEqual(ba, bb)
 }
 
+/** First and last two characters, for display; the full value never leaves core. */
+export function maskSecret(value: string): string {
+  if (value.length <= 4) return '****'
+  return `${value.slice(0, 2)}…${value.slice(-2)}`
+}
+
 export function randomHex(bytes: number): string {
   return crypto.randomBytes(bytes).toString('hex')
 }

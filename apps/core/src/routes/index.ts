@@ -13,6 +13,7 @@ import {
   type CredentialKind,
   type EventsResponse,
   type Health,
+  type McpServersResponse,
   type PortalsResponse,
   type ProjectsResponse,
   type PushResponse,
@@ -31,6 +32,7 @@ import { HttpError, badRequest, notFound, statusOf } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { GitHub } from '../git/github.js'
 import { errorMessage, logger } from '../logger.js'
+import type { McpServerStore } from '../mcp/store.js'
 import type { ModelCatalog } from '../models/catalog.js'
 import type { NotificationService } from '../notifications/service.js'
 import { pushEndpointSchema, pushSubscriptionSchema, putWebhooksSchema } from '../notifications/service.js'
@@ -61,6 +63,7 @@ export type AppDeps = {
   threads: ThreadService
   portals: PortalGateway
   usage: UsageService
+  mcp: McpServerStore
 }
 
 const imageSchema = z.object({ mediaType: z.string(), dataUrl: z.string() })
@@ -99,6 +102,19 @@ const permissionSchema = z.object({ decision: z.enum(['allow', 'deny']) })
 const answersSchema = z.object({ answers: z.record(z.string(), z.array(z.string())) })
 const prSchema = z.object({ title: z.string().optional(), body: z.string().optional(), draft: z.boolean().optional() })
 const putCredentialSchema = z.object({ token: z.string().optional(), apiKey: z.string().optional() })
+const mcpValuesSchema = z.array(z.object({ name: z.string(), value: z.string().optional() }))
+const mcpServerSchema = z.intersection(
+  z.object({
+    name: z.string().min(1),
+    enabled: z.boolean().optional(),
+    scope: z.enum(['all', 'selected']).optional(),
+    projectIds: z.array(z.string()).optional(),
+  }),
+  z.discriminatedUnion('type', [
+    z.object({ type: z.literal('http'), url: z.string().min(1), headers: mcpValuesSchema }),
+    z.object({ type: z.literal('stdio'), command: z.string().min(1), args: z.array(z.string()).optional(), env: mcpValuesSchema }),
+  ]),
+)
 const shareSchema = z.object({ hours: z.union([z.literal(1), z.literal(3), z.literal(24), z.literal(168)]) })
 
 function parsePort(raw: string): number {
@@ -309,6 +325,21 @@ export function createApp(deps: AppDeps): Hono {
   )
 
   app.get('/api/snapshots', async (c) => c.json(await deps.snapshots.usage()))
+
+  // ---- mcp servers -------------------------------------------------------------------
+
+  app.get('/api/mcp-servers', async (c) => {
+    const body: McpServersResponse = { servers: await deps.mcp.list() }
+    return c.json(body)
+  })
+  app.post('/api/mcp-servers', jsonBody(mcpServerSchema), async (c) => c.json(await deps.mcp.create(c.req.valid('json')), 201))
+  app.put('/api/mcp-servers/:id', jsonBody(mcpServerSchema), async (c) =>
+    c.json(await deps.mcp.update(c.req.param('id'), c.req.valid('json'))),
+  )
+  app.delete('/api/mcp-servers/:id', async (c) => {
+    await deps.mcp.remove(c.req.param('id'))
+    return c.body(null, 204)
+  })
 
   // ---- threads ---------------------------------------------------------------------------
 

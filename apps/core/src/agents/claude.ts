@@ -149,6 +149,9 @@ export class ClaudeAdapter implements Adapter {
       opts.systemPromptSuffix,
       '--setting-sources',
       'project',
+      ...(opts.mcpConfigPath ? ['--mcp-config', opts.mcpConfigPath] : []),
+      // Valet's generated file is the only MCP source: no user scope, no claude.ai
+      // connectors, and no unreviewed `.mcp.json` from the repository.
       '--strict-mcp-config',
     ]
     const env: Record<string, string> = {

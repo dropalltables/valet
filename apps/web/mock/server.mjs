@@ -142,11 +142,43 @@ const credentials = {
   github: { kind: 'github', configured: true, label: 'ghp_…a1b2 (natey)', method: null, updatedAt: ago(60 * 24 * 9) },
 }
 
+const mcpServers = new Map(
+  [
+    {
+      id: 'm-github',
+      name: 'github',
+      enabled: true,
+      scope: 'all',
+      projectIds: [],
+      updatedAt: ago(60 * 24 * 2),
+      type: 'http',
+      url: 'https://api.githubcopilot.com/mcp/',
+      headers: [{ name: 'Authorization' }],
+    },
+    {
+      id: 'm-files',
+      name: 'files',
+      enabled: true,
+      scope: 'selected',
+      projectIds: ['p-valet'],
+      updatedAt: ago(60 * 24 * 6),
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem'],
+      env: [{ name: 'API_KEY' }],
+    },
+  ].map((s) => [s.id, s]),
+)
+
+const mcpCount = (projectId) =>
+  [...mcpServers.values()].filter((s) => s.enabled && (s.scope === 'all' || s.projectIds.includes(projectId))).length
+
 const settings = {
   idlePauseMinutes: 10,
   defaultAgent: 'claude',
   defaultModel: { claude: 'opus', codex: 'gpt-6-astra' },
   defaultPermissions: 'auto',
+  allowProjectMcpJson: false,
 }
 
 // The mock has no push service, so browsers subscribe against this fixed public key
@@ -199,6 +231,7 @@ function listItem(row) {
     ...row,
     projectName: projects.get(row.projectId)?.name ?? 'Unknown',
     diffStats: t?.diffStats ?? null,
+    mcpServers: mcpCount(row.projectId),
   }
 }
 
@@ -901,6 +934,33 @@ async function handle(req, res) {
       totalBytes: withSnapshot.reduce((sum, p) => sum + p.snapshot.sizeBytes, 0),
       budgetBytes: 20 * 1024 ** 3,
     })
+  }
+
+  if (seg[0] === 'api' && seg[1] === 'mcp-servers') {
+    const server = seg[2] ? mcpServers.get(seg[2]) : null
+    if (seg[2] && !server) return fail(res, 404, 'MCP server not found')
+    if (method === 'DELETE') {
+      mcpServers.delete(server.id)
+      return send(res, 204)
+    }
+    if (method === 'POST' || method === 'PUT') {
+      const body = await readJson(req)
+      const values = (body.type === 'http' ? body.headers : body.env).map((v) => ({ name: v.name }))
+      const next = {
+        id: server?.id ?? `m-${randomUUID().slice(0, 6)}`,
+        name: body.name,
+        enabled: body.enabled ?? true,
+        scope: body.scope ?? 'all',
+        projectIds: body.scope === 'selected' ? (body.projectIds ?? []) : [],
+        updatedAt: now(),
+        ...(body.type === 'http'
+          ? { type: 'http', url: body.url, headers: values }
+          : { type: 'stdio', command: body.command, args: body.args ?? [], env: values }),
+      }
+      mcpServers.set(next.id, next)
+      return send(res, method === 'POST' ? 201 : 200, next)
+    }
+    return send(res, 200, { servers: [...mcpServers.values()].sort((a, b) => a.name.localeCompare(b.name)) })
   }
 
   if (path === '/api/projects') {

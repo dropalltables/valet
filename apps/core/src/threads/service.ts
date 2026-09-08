@@ -38,6 +38,7 @@ import { withAskpass } from '../git/askpass.js'
 import { computeChanges, git, type GitRunner } from '../git/changes.js'
 import { GitHub, cloneUrl, requireRepoRef } from '../git/github.js'
 import { newId, shortHex } from '../ids.js'
+import type { McpServerStore } from '../mcp/store.js'
 import { errorMessage, logger } from '../logger.js'
 import { SandboxPoller } from '../portals/poller.js'
 import type { PortalUrls } from '../portals/urls.js'
@@ -58,6 +59,7 @@ import {
   runSetup,
   shortSnapshotKey,
   syncCodexAuth,
+  writeClaudeMcpConfig,
   writeCodexHome,
   writeEnvFile,
   type CloneSource,
@@ -110,6 +112,7 @@ export type ThreadServiceDeps = {
   credentials: CredentialStore
   settings: SettingsService
   portalUrls: PortalUrls
+  mcp: McpServerStore
 }
 
 const now = (): string => new Date().toISOString()
@@ -129,6 +132,7 @@ export class ThreadService {
   private readonly credentials: CredentialStore
   private readonly settings: SettingsService
   private readonly portalUrls: PortalUrls
+  private readonly mcp: McpServerStore
 
   constructor(deps: ThreadServiceDeps) {
     this.db = deps.db
@@ -141,6 +145,7 @@ export class ThreadService {
     this.credentials = deps.credentials
     this.settings = deps.settings
     this.portalUrls = deps.portalUrls
+    this.mcp = deps.mcp
   }
 
   // ---- rows -----------------------------------------------------------------------
@@ -157,7 +162,8 @@ export class ThreadService {
   }
 
   private async listItem(row: ThreadRow): Promise<ThreadListItem> {
-    return toListItem(row, await this.projectName(row.projectId))
+    const [projectName, mcpServers] = await Promise.all([this.projectName(row.projectId), this.mcp.countFor(row.projectId)])
+    return toListItem(row, projectName, mcpServers)
   }
 
   private async patch(id: string, set: Partial<ThreadRow>): Promise<ThreadRow> {
@@ -234,7 +240,8 @@ export class ThreadService {
       .innerJoin(projects, eq(projects.id, threads.projectId))
       .where(archived ? eq(threads.status, 'archived') : ne(threads.status, 'archived'))
       .orderBy(desc(threads.lastActivityAt))
-    return rows.map((r) => toListItem(r.thread, r.projectName))
+    const mcpCount = await this.mcp.counts()
+    return rows.map((r) => toListItem(r.thread, r.projectName, mcpCount(r.thread.projectId)))
   }
 
   async listForProject(projectId: string): Promise<ThreadRow[]> {
@@ -663,11 +670,16 @@ export class ThreadService {
     const exec = await this.ensureExec(live)
     const env: Record<string, string> = { ...this.sandboxEnv(row.id, await this.projects.decryptedEnv(row.projectId)), HOME: SANDBOX.home }
 
+    const mcpServers = await this.mcp.forProject(row.projectId)
+
     let adapter: Adapter
+    let mcpConfigPath: string | null = null
     if (row.agent === 'claude') {
       const cred = await this.credentials.claudeEnv()
       if (!cred) throw new Error('No Claude Code credential is configured. Add one in Settings.')
       Object.assign(env, cred, { CLAUDE_CONFIG_DIR: SANDBOX.claudeConfigDir })
+      const { allowProjectMcpJson } = await this.settings.get()
+      mcpConfigPath = await writeClaudeMcpConfig(sandbox.supervisor, mcpServers, allowProjectMcpJson, this.sink(row.id))
       adapter = new ClaudeAdapter()
     } else {
       const auth = await this.credentials.codexAuth()
@@ -675,9 +687,9 @@ export class ThreadService {
       env.CODEX_HOME = SANDBOX.codexHome
       if (auth.mode === 'api-key') {
         env.CODEX_API_KEY = auth.apiKey
-        await writeCodexHome(sandbox.supervisor, null)
+        await writeCodexHome(sandbox.supervisor, null, mcpServers)
       } else {
-        await writeCodexHome(sandbox.supervisor, auth.authJson)
+        await writeCodexHome(sandbox.supervisor, auth.authJson, mcpServers)
       }
       adapter = new CodexAdapter()
     }
@@ -691,6 +703,7 @@ export class ThreadService {
       permissions: row.permissions,
       env,
       resumeSessionId: row.agentSessionId,
+      mcpConfigPath,
       systemPromptSuffix: systemPromptSuffix({
         branch: row.branch,
         baseBranch: row.baseBranch,

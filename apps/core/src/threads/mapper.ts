@@ -24,8 +24,8 @@ export function toThread(row: ThreadRow): Thread {
   }
 }
 
-export function toListItem(row: ThreadRow, projectName: string): ThreadListItem {
-  return { ...toThread(row), projectName, diffStats: row.diffStats ?? null }
+export function toListItem(row: ThreadRow, projectName: string, mcpServers: number): ThreadListItem {
+  return { ...toThread(row), projectName, diffStats: row.diffStats ?? null, mcpServers }
 }
 
 export function toPortals(row: ThreadRow, urls: PortalUrls, now = Date.now()): Portal[] {

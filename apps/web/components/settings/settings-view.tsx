@@ -42,6 +42,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useHealth } from '@/components/app/health-gate'
+import { McpServers } from '@/components/settings/mcp-servers'
 
 export function SettingsView() {
   return (
@@ -49,6 +50,7 @@ export function SettingsView() {
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 px-6 py-8">
         <h1 className="text-lg font-medium">Settings</h1>
         <Credentials />
+        <McpServers />
         <Sandbox />
         <Snapshots />
         <Defaults />

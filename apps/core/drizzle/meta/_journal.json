@@ -57,6 +57,13 @@
       "when": 1788850721339,
       "tag": "0007_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788850859836,
+      "tag": "0008_mcp_servers",
+      "breakpoints": true
     }
   ]
 }
