@@ -1,5 +1,18 @@
 import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
-import type { AgentKind, DiffStats, ModelOption, ModelsSource, PermissionPolicy, ProjectSource, PullRequestState, Service, Settings, ThreadStatus } from '@valet/shared'
+import type {
+  AgentKind,
+  DiffStats,
+  ModelOption,
+  ModelsSource,
+  NotificationEvent,
+  PermissionPolicy,
+  ProjectSource,
+  PullRequestState,
+  Service,
+  Settings,
+  ThreadStatus,
+  WebhookKind,
+} from '@valet/shared'
 
 export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
@@ -96,7 +109,31 @@ export const credentials = pgTable('credentials', {
 export const settings = pgTable('settings', {
   id: text('id').primaryKey(),
   data: jsonb('data').$type<Partial<Settings>>().notNull(),
+  /** Web Push application server keys, generated on first use. Null until then. */
+  vapidPublicKey: text('vapid_public_key'),
+  vapidPrivateKeyEnc: text('vapid_private_key_enc'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/** One row per browser that enabled push; `endpoint` is the URL its push service issued. */
+export const pushSubscriptions = pgTable('push_subscriptions', {
+  endpoint: text('endpoint').primaryKey(),
+  p256dh: text('p256dh').notNull(),
+  auth: text('auth').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+/**
+ * Outbound notification target. `secretEnc` is the HMAC key for `generic` webhooks,
+ * and `position` is the index the operator submitted, which is the order shown back.
+ */
+export const webhooks = pgTable('webhooks', {
+  id: text('id').primaryKey(),
+  kind: text('kind').$type<WebhookKind>().notNull(),
+  url: text('url').notNull(),
+  secretEnc: text('secret_enc'),
+  events: jsonb('events').$type<NotificationEvent[]>().notNull(),
+  position: integer('position').notNull(),
 })
 
 /**
@@ -137,3 +174,5 @@ export type ThreadEventRow = typeof threadEvents.$inferSelect
 export type CredentialRow = typeof credentials.$inferSelect
 export type DeviceLoginRow = typeof deviceLogins.$inferSelect
 export type ModelCatalogRow = typeof modelCatalog.$inferSelect
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect
+export type WebhookRow = typeof webhooks.$inferSelect

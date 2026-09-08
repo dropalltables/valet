@@ -1,25 +1,46 @@
 'use client'
 
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
   AGENT_LABELS,
   DEFAULT_MODELS,
+  MAX_WEBHOOKS,
+  NOTIFICATION_EVENTS,
+  NOTIFICATION_EVENT_LABELS,
+  WEBHOOK_LABELS,
   type AgentKind,
   type CredentialKind,
   type CredentialStatus,
   type DeviceLogin,
+  type NotificationEvent,
   type PermissionPolicy,
+  type PutWebhooksRequest,
   type Settings,
+  type Webhook,
+  type WebhookKind,
 } from '@valet/shared'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
-import { useAgents, useCredentials, useSettings } from '@/lib/hooks'
+import { useAgents, useCredentials, useNotifications, useSettings } from '@/lib/hooks'
+import { disablePush, enablePush, pushStatus, type PushState, type PushStatus } from '@/lib/push'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useHealth } from '@/components/app/health-gate'
 
 export function SettingsView() {
@@ -30,6 +51,7 @@ export function SettingsView() {
         <Credentials />
         <Sandbox />
         <Defaults />
+        <Notifications />
         <System />
       </div>
     </div>
@@ -447,6 +469,318 @@ function Defaults() {
         </div>
       </form>
     </Section>
+  )
+}
+
+const WEBHOOK_URL_PLACEHOLDER: Record<WebhookKind, string> = {
+  slack: 'https://hooks.slack.com/services/...',
+  discord: 'https://discord.com/api/webhooks/...',
+  ntfy: 'https://ntfy.sh/topic',
+  generic: 'https://example.com/hook',
+}
+
+const PUSH_STATE_WORD: Record<PushState, string> = {
+  unsupported: 'Not supported',
+  denied: 'Blocked in browser settings',
+  off: 'Off',
+  on: 'On',
+}
+
+type PutWebhook = PutWebhooksRequest['webhooks'][number]
+
+type WebhookDraft = { id: string | null; kind: WebhookKind; url: string; secret: string; events: NotificationEvent[]; hasSecret: boolean }
+
+function Notifications() {
+  const { data, mutate } = useNotifications()
+  if (!data) return null
+  return (
+    <Section title="Notifications">
+      <BrowserPush vapidPublicKey={data.vapidPublicKey} browsers={data.browsers} onChange={() => void mutate()} />
+      <Webhooks
+        webhooks={data.webhooks}
+        onSave={async (next) => {
+          await mutate(await api.notifications.putWebhooks({ webhooks: next }), { revalidate: false })
+        }}
+      />
+    </Section>
+  )
+}
+
+function BrowserPush({ vapidPublicKey, browsers, onChange }: { vapidPublicKey: string; browsers: number; onChange: () => void }) {
+  const [status, setStatus] = useState<PushStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const read = useCallback(() => {
+    void pushStatus().then(setStatus)
+  }, [])
+  useEffect(read, [read])
+
+  async function run(action: () => Promise<void>): Promise<void> {
+    setBusy(true)
+    try {
+      await action()
+      onChange()
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      read()
+      setBusy(false)
+    }
+  }
+
+  const enable = (): Promise<void> =>
+    run(async () => {
+      const { subscription, replaced } = await enablePush(vapidPublicKey)
+      if (replaced) await api.notifications.unsubscribe({ endpoint: replaced })
+      await api.notifications.subscribe(subscription)
+    })
+
+  const disable = (): Promise<void> =>
+    run(async () => {
+      const endpoint = await disablePush()
+      if (endpoint) await api.notifications.unsubscribe({ endpoint })
+    })
+
+  // Test sends to this browser only, which is the one the state above describes.
+  const test = (endpoint: string): Promise<void> =>
+    run(async () => {
+      const res = await api.notifications.test({ endpoint })
+      if (!res.ok) throw new Error(res.error ?? 'Test failed')
+    })
+
+  const endpoint = status?.endpoint ?? null
+
+  return (
+    <div className="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <h3 className="font-medium">Browser push</h3>
+      {status && <span className="text-xs text-muted-foreground">{PUSH_STATE_WORD[status.state]}</span>}
+      {browsers > 0 && <span className="text-xs text-muted-foreground tabular-nums">Browsers: {browsers}</span>}
+      {status?.state === 'off' && (
+        <Button size="sm" disabled={busy} onClick={() => void enable()}>
+          Enable
+        </Button>
+      )}
+      {endpoint && (
+        <>
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void test(endpoint)}>
+            Test
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void disable()}>
+            Disable
+          </Button>
+        </>
+      )}
+    </div>
+  )
+}
+
+function Webhooks({ webhooks, onSave }: { webhooks: Webhook[]; onSave: (next: PutWebhook[]) => Promise<void> }) {
+  const [draft, setDraft] = useState<WebhookDraft | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Webhook | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  // Core replaces the whole list, and keeps a stored secret when `secret` is omitted.
+  const keep = (w: Webhook): PutWebhook => ({ id: w.id, kind: w.kind, url: w.url, events: w.events })
+
+  async function put(next: PutWebhook[]): Promise<void> {
+    setBusy(true)
+    try {
+      await onSave(next)
+      setDraft(null)
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function save(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!draft) return
+    const others = webhooks.filter((w) => w.id !== draft.id).map(keep)
+    const entry: PutWebhook = {
+      ...(draft.id ? { id: draft.id } : {}),
+      kind: draft.kind,
+      url: draft.url.trim(),
+      events: draft.events,
+      ...(draft.kind === 'generic' && draft.secret ? { secret: draft.secret } : {}),
+    }
+    await put([...others, entry])
+  }
+
+  async function test(id: string): Promise<void> {
+    setBusy(true)
+    try {
+      const res = await api.notifications.testWebhook(id)
+      if (res.ok) toast.success('Delivered')
+      else toast.error(res.error ?? 'Test failed')
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex min-h-7 items-center justify-between">
+        <h3 className="text-sm font-medium">Webhooks</h3>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={webhooks.length >= MAX_WEBHOOKS}
+          onClick={() => setDraft({ id: null, kind: 'slack', url: '', secret: '', events: [...NOTIFICATION_EVENTS], hasSecret: false })}
+        >
+          Add webhook
+        </Button>
+      </div>
+      {webhooks.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Type</TableHead>
+              <TableHead>URL</TableHead>
+              <TableHead>Events</TableHead>
+              <TableHead className="w-0" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {webhooks.map((w) => (
+              <TableRow key={w.id}>
+                <TableCell>{WEBHOOK_LABELS[w.kind]}</TableCell>
+                <TableCell className="max-w-64 truncate font-mono text-xs text-muted-foreground">{w.url}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {NOTIFICATION_EVENTS.filter((e) => w.events.includes(e))
+                    .map((e) => NOTIFICATION_EVENT_LABELS[e])
+                    .join(', ')}
+                </TableCell>
+                <TableCell className="whitespace-nowrap">
+                  <Button size="xs" variant="ghost" disabled={busy} onClick={() => void test(w.id)}>
+                    Test
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => setDraft({ id: w.id, kind: w.kind, url: w.url, secret: '', events: w.events, hasSecret: w.hasSecret })}
+                  >
+                    Edit
+                  </Button>
+                  <Button size="xs" variant="ghost" disabled={busy} onClick={() => setPendingDelete(w)}>
+                    Delete
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <Dialog open={draft !== null} onOpenChange={(open) => !open && setDraft(null)}>
+        <DialogContent>
+          {draft && (
+            <form onSubmit={save} className="flex flex-col gap-4">
+              <DialogHeader>
+                <DialogTitle>{draft.id ? 'Edit webhook' : 'Add webhook'}</DialogTitle>
+              </DialogHeader>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="webhook-kind">Type</Label>
+                <Select value={draft.kind} onValueChange={(v) => setDraft({ ...draft, kind: v as WebhookKind })}>
+                  <SelectTrigger id="webhook-kind" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(WEBHOOK_LABELS) as WebhookKind[]).map((k) => (
+                      <SelectItem key={k} value={k}>
+                        {WEBHOOK_LABELS[k]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="webhook-url">URL</Label>
+                <Input
+                  id="webhook-url"
+                  type="url"
+                  required
+                  value={draft.url}
+                  onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+                  placeholder={WEBHOOK_URL_PLACEHOLDER[draft.kind]}
+                  className="font-mono"
+                  autoFocus
+                />
+              </div>
+              {draft.kind === 'generic' && (
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="webhook-secret">Signing secret</Label>
+                  <Input
+                    id="webhook-secret"
+                    type="password"
+                    autoComplete="off"
+                    value={draft.secret}
+                    onChange={(e) => setDraft({ ...draft, secret: e.target.value })}
+                    placeholder={draft.hasSecret ? 'Unchanged' : 'Optional'}
+                    className="font-mono"
+                  />
+                </div>
+              )}
+              <fieldset className="flex flex-col gap-2">
+                <legend className="pb-2 text-sm leading-none font-medium">Events</legend>
+                {NOTIFICATION_EVENTS.map((event) => (
+                  <div key={event} className="flex items-center gap-2">
+                    <Switch
+                      id={`webhook-event-${event}`}
+                      checked={draft.events.includes(event)}
+                      onCheckedChange={(on) =>
+                        setDraft({
+                          ...draft,
+                          events: on ? [...draft.events, event] : draft.events.filter((e) => e !== event),
+                        })
+                      }
+                    />
+                    <Label htmlFor={`webhook-event-${event}`}>{NOTIFICATION_EVENT_LABELS[event]}</Label>
+                  </div>
+                ))}
+              </fieldset>
+              <DialogFooter>
+                <Button type="button" variant="ghost" onClick={() => setDraft(null)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={busy || !draft.url.trim() || draft.events.length === 0}>
+                  Save
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={pendingDelete !== null} onOpenChange={(open) => !open && setPendingDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete webhook</AlertDialogTitle>
+            <AlertDialogDescription className="flex flex-col gap-1">
+              <span>{pendingDelete ? WEBHOOK_LABELS[pendingDelete.kind] : ''}</span>
+              <span className="font-mono text-xs break-all">{pendingDelete?.url}</span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={busy}
+              onClick={() => {
+                const id = pendingDelete?.id
+                setPendingDelete(null)
+                if (id) void put(webhooks.filter((o) => o.id !== id).map(keep))
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   )
 }
 

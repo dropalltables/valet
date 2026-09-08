@@ -139,6 +139,17 @@ const settings = {
   defaultPermissions: 'auto',
 }
 
+// The mock has no push service, so browsers subscribe against this fixed public key
+// and no notification ever arrives; subscriptions are only counted.
+const notifications = {
+  vapidPublicKey: 'BK5TZgtSkbf6J6rxGHFPxV6Rgc35Ec7rv7hXSqtSrQdMkEj0b9OnuBKomLPX7pJRwg5zSNSoamZ7cFD50nSPULg',
+  browsers: 1,
+  webhooks: [
+    { id: 'w-slack', kind: 'slack', url: 'https://hooks.slack.com/services/T000/B000/xxxx', hasSecret: false, events: ['waiting', 'error'] },
+    { id: 'w-generic', kind: 'generic', url: 'https://example.com/hook', hasSecret: true, events: ['waiting', 'finished', 'error'] },
+  ],
+}
+
 const MODELS = {
   claude: [
     { id: 'opus', label: 'Opus' },
@@ -707,6 +718,38 @@ async function handle(req, res) {
         defaultModel: MODELS[id][0].id,
       })),
     })
+  }
+
+  if (path === '/api/notifications') return send(res, 200, notifications)
+  if (path === '/api/notifications/subscriptions') {
+    if (method === 'POST') {
+      notifications.browsers += 1
+      return send(res, 204)
+    }
+    if (method === 'DELETE') {
+      notifications.browsers = Math.max(0, notifications.browsers - 1)
+      return send(res, 204)
+    }
+  }
+  if (path === '/api/notifications/test' && method === 'POST') {
+    await readJson(req)
+    return send(res, 200, { ok: true, error: null })
+  }
+  if (path === '/api/notifications/webhooks' && method === 'PUT') {
+    const body = await readJson(req)
+    notifications.webhooks = body.webhooks.map((w, i) => ({
+      id: w.id ?? `w-${i}-${randomUUID().slice(0, 8)}`,
+      kind: w.kind,
+      url: w.url,
+      hasSecret: w.kind === 'generic' && (Boolean(w.secret) || (notifications.webhooks.find((o) => o.id === w.id)?.hasSecret ?? false)),
+      events: w.events,
+    }))
+    return send(res, 200, notifications)
+  }
+  if (seg[0] === 'api' && seg[1] === 'notifications' && seg[2] === 'webhooks' && seg[4] === 'test' && method === 'POST') {
+    const hook = notifications.webhooks.find((w) => w.id === seg[3])
+    if (!hook) return fail(res, 404, 'webhook not found')
+    return send(res, 200, { ok: true, error: null })
   }
 
   if (path === '/api/credentials') return send(res, 200, Object.values(credentials))
