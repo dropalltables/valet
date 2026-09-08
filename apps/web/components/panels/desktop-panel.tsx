@@ -93,7 +93,18 @@ export default function DesktopPanel({ threadId }: { threadId: string }) {
           </Button>
         )}
       </div>
-      <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden bg-muted/30" />
+      {/*
+        noVNC replaces the pointer with the remote cursor image (inline style on its canvas),
+        which hides the local pointer while just watching. In view-only mode keep the OS
+        pointer and dim the frame so the mode is visible without reading the toggle.
+      */}
+      <div
+        ref={hostRef}
+        className={cn(
+          'min-h-0 flex-1 overflow-hidden bg-muted/30 transition-opacity',
+          viewOnly && 'opacity-70 [&_canvas]:cursor-default!',
+        )}
+      />
     </div>
   )
 }

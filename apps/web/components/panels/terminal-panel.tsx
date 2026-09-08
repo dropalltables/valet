@@ -78,6 +78,9 @@ export default function TerminalPanel({ threadId }: { threadId: string }) {
       scrollback: 5000,
       allowProposedApi: true,
       theme: THEMES[theme],
+      // tmux reports mouse events (for wheel scrolling), so plain drag goes to tmux;
+      // Option-drag still selects text in the browser.
+      macOptionClickForcesSelection: true,
     })
     const fit = new FitAddon()
     term.loadAddon(fit)

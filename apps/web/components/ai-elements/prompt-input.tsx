@@ -921,7 +921,10 @@ export const PromptInput = ({
         ref={formRef}
         {...props}
       >
-        <InputGroup className="overflow-hidden">{children}</InputGroup>
+        {/* A disabled select or submit button inside must not dim the whole composer. */}
+        <InputGroup className="overflow-hidden has-disabled:bg-transparent has-disabled:opacity-100 dark:has-disabled:bg-input/30">
+          {children}
+        </InputGroup>
       </form>
     </>
   );

@@ -21,7 +21,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { StatusWord } from '@/components/app/status'
 import { useAppData } from '@/components/app/data-provider'
 import type { ThreadActions } from '@/components/thread/thread-actions'
@@ -70,44 +69,12 @@ export function ThreadHeader({ thread, project, costUsd, actions }: Props) {
       <div className="flex items-center gap-2">
         <TitleEditor title={thread.title} onRename={rename} />
         <span className="flex-1" />
-        {thread.status === 'running' && (
-          <Button size="sm" variant="outline" disabled={disabled} onClick={actions.interrupt}>
-            Interrupt
-          </Button>
-        )}
-        {(thread.status === 'idle' || thread.status === 'waiting') && (
-          <Button size="sm" variant="outline" disabled={disabled} onClick={actions.pause}>
-            Pause
-          </Button>
-        )}
-        {thread.status === 'paused' && (
-          <Button size="sm" variant="outline" disabled={disabled} onClick={actions.wake}>
-            Wake
-          </Button>
-        )}
-        <Button size="sm" variant="outline" disabled={!actions.canGit || disabled} onClick={() => void actions.push()}>
-          Push
-        </Button>
-        {thread.pr ? (
+        {/* Stop lives in the composer; Push and Create PR live in the Changes tab. */}
+        {thread.pr && (
           <Button asChild size="sm" variant="secondary">
             <a href={thread.pr.url} target="_blank" rel="noreferrer">
               {PR_STATE[thread.pr.state]} #{thread.pr.number}
             </a>
-          </Button>
-        ) : actions.prBlocked ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span tabIndex={0}>
-                <Button size="sm" disabled>
-                  Create PR
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>{actions.prBlocked}</TooltipContent>
-          </Tooltip>
-        ) : (
-          <Button size="sm" disabled={!actions.canGit || disabled} onClick={actions.openPr}>
-            Create PR
           </Button>
         )}
         <DropdownMenu>
@@ -117,6 +84,16 @@ export function ThreadHeader({ thread, project, costUsd, actions }: Props) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {(thread.status === 'idle' || thread.status === 'waiting') && (
+              <DropdownMenuItem disabled={disabled} onSelect={actions.pause}>
+                Pause
+              </DropdownMenuItem>
+            )}
+            {thread.status === 'paused' && (
+              <DropdownMenuItem disabled={disabled} onSelect={actions.wake}>
+                Wake
+              </DropdownMenuItem>
+            )}
             {thread.status === 'archived' ? (
               <DropdownMenuItem onSelect={actions.unarchive}>Unarchive</DropdownMenuItem>
             ) : (
