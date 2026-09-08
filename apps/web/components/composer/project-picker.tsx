@@ -40,7 +40,7 @@ export function ProjectPicker({
       <SelectTrigger size={size} aria-label="Project" className={triggerClassName}>
         <SelectValue placeholder="Project" />
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent position="popper" align="start" sideOffset={6}>
         {projects.map((p) => (
           <SelectItem key={p.id} value={p.id}>
             {p.name}

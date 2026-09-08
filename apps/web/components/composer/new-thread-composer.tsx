@@ -30,11 +30,11 @@ import { useAppData } from '@/components/app/data-provider'
 import { AttachmentStrip } from '@/components/composer/attachments'
 import { DropOverlay } from '@/components/composer/drop-overlay'
 import { cn } from '@/lib/utils'
+import { NewProjectForm } from '@/components/composer/new-project-form'
+import { ProjectPicker } from '@/components/composer/project-picker'
 
 /** Text-only controls inside the tab; the tab supplies the surface. */
 const TAB_TRIGGER = 'h-7 border-0 bg-transparent px-2 shadow-none hover:bg-background/70 dark:bg-transparent dark:hover:bg-background/40'
-import { NewProjectForm } from '@/components/composer/new-project-form'
-import { ProjectPicker } from '@/components/composer/project-picker'
 
 export function NewThreadComposer() {
   return (
@@ -148,7 +148,7 @@ function Composer() {
             <PromptInputSelectTrigger size="sm" aria-label="Base branch" className={cn(TAB_TRIGGER, 'font-mono text-xs')}>
               <PromptInputSelectValue placeholder="Branch" />
             </PromptInputSelectTrigger>
-            <PromptInputSelectContent align="end">
+            <PromptInputSelectContent position="popper" align="end" sideOffset={6}>
               {branches.map((b) => (
                 <PromptInputSelectItem key={b} value={b} className="font-mono text-xs">
                   {b}
@@ -182,7 +182,7 @@ function Composer() {
               <PromptInputSelectTrigger size="sm" aria-label="Permissions">
                 <PromptInputSelectValue />
               </PromptInputSelectTrigger>
-              <PromptInputSelectContent>
+              <PromptInputSelectContent position="popper" align="start">
                 <PromptInputSelectItem value="auto">Auto</PromptInputSelectItem>
                 <PromptInputSelectItem value="ask">Ask</PromptInputSelectItem>
               </PromptInputSelectContent>
@@ -199,7 +199,7 @@ function Composer() {
               <PromptInputSelectTrigger size="sm" aria-label="Agent">
                 <PromptInputSelectValue placeholder="Agent" />
               </PromptInputSelectTrigger>
-              <PromptInputSelectContent>
+              <PromptInputSelectContent position="popper" align="start">
                 {agents.map((a) =>
                   a.available ? (
                     <PromptInputSelectItem key={a.id} value={a.id}>
@@ -233,7 +233,7 @@ function Composer() {
               <PromptInputSelectTrigger size="sm" aria-label="Model">
                 <PromptInputSelectValue placeholder="Model" />
               </PromptInputSelectTrigger>
-              <PromptInputSelectContent>
+              <PromptInputSelectContent position="popper" align="start">
                 {models.map((m) => (
                   <PromptInputSelectItem key={m.id} value={m.id}>
                     {m.label}
