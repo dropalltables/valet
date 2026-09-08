@@ -122,7 +122,7 @@ function Composer() {
         permissions: permissions ?? 'auto',
         baseBranch: effectiveBranch,
       })
-      upsertThread({ ...thread, projectName: project.name, diffStats: null })
+      upsertThread({ ...thread, projectName: project.name, diffStats: null, mcpServers: 0 })
       router.push(`/threads/${thread.id}`)
     } catch (err) {
       toast.error(errorMessage(err))

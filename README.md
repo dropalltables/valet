@@ -73,6 +73,12 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
 - **Permissions.** By default the container is the sandbox and the agent runs
   without prompts. Threads can be created in *ask* mode, where tool use outside
   file edits pauses for approval in the transcript.
+- **MCP servers.** Servers added under Settings apply to every project or to selected
+  ones, and are written into the sandbox at launch: Claude Code gets a generated
+  `--mcp-config` file, Codex `[mcp_servers.*]` in its `config.toml`. Header and
+  environment values are encrypted at rest and written `0600` inside the container.
+  A repository's own `.mcp.json` is ignored unless *Load .mcp.json from repositories*
+  is on in Settings.
 - **Git.** GitHub credentials never sit in the container. Pushes and pull requests
   run through core with a short-lived credential helper.
 - **Desktop and terminal.** Every sandbox runs a VNC desktop (Xfce, Chromium) and a

@@ -6,7 +6,7 @@ import { promisify } from 'node:util'
 import { asc, count, eq } from 'drizzle-orm'
 import type { Project, ProjectEnvVar } from '@valet/shared'
 import type { Config } from '../config.js'
-import type { Cipher } from '../crypto.js'
+import { maskSecret, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
 import { projectEnvVars, projects, threads, type ProjectRow } from '../db/schema.js'
 import { badRequest, conflict, notFound } from '../errors.js'
@@ -38,11 +38,6 @@ export function toProject(row: ProjectRow): Project {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }
-}
-
-function maskValue(value: string): string {
-  if (value.length <= 4) return '****'
-  return `${value.slice(0, 2)}…${value.slice(-2)}`
 }
 
 export class ProjectService {
@@ -166,7 +161,7 @@ export class ProjectService {
   async listEnv(id: string): Promise<ProjectEnvVar[]> {
     await this.getRow(id)
     const rows = await this.db.select().from(projectEnvVars).where(eq(projectEnvVars.projectId, id)).orderBy(asc(projectEnvVars.name))
-    return rows.map((r) => ({ name: r.name, maskedValue: maskValue(this.cipher.decrypt(r.valueEnc)), kind: r.kind }))
+    return rows.map((r) => ({ name: r.name, maskedValue: maskSecret(this.cipher.decrypt(r.valueEnc)), kind: r.kind }))
   }
 
   async putEnv(id: string, req: PutProjectEnvInput): Promise<ProjectEnvVar[]> {

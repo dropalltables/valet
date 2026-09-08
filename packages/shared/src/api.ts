@@ -23,6 +23,8 @@ import type {
   DiffStats,
   FileEntry,
   Health,
+  McpServer,
+  McpServerScope,
   ModelOption,
   PermissionPolicy,
   Portal,
@@ -144,12 +146,40 @@ export type PutProjectEnvRequest = {
 }
 
 // ---------------------------------------------------------------------------
+// MCP servers
+// ---------------------------------------------------------------------------
+
+/** GET /api/mcp-servers -> { servers } by name */
+export type McpServersResponse = { servers: McpServer[] }
+
+/** A header (http) or environment variable (stdio); an omitted `value` keeps the stored one. */
+export type McpValueInput = { name: string; value?: string | undefined }
+
+/**
+ * POST /api/mcp-servers -> McpServer (201)
+ * PUT  /api/mcp-servers/:id -> McpServer (replaces the whole server)
+ * DELETE /api/mcp-servers/:id -> 204
+ */
+export type McpServerInput = {
+  name: string
+  enabled?: boolean | undefined
+  scope?: McpServerScope | undefined
+  /** Required when `scope === 'selected'`. */
+  projectIds?: string[] | undefined
+} & (
+  | { type: 'http'; url: string; headers: McpValueInput[] }
+  | { type: 'stdio'; command: string; args?: string[] | undefined; env: McpValueInput[] }
+)
+
+// ---------------------------------------------------------------------------
 // Threads
 // ---------------------------------------------------------------------------
 
 export type ThreadListItem = Thread & {
   projectName: string
   diffStats: DiffStats | null
+  /** Enabled MCP servers that apply to this thread's project. */
+  mcpServers: number
 }
 
 /** GET /api/threads?archived=0|1 -> { threads } newest activity first */

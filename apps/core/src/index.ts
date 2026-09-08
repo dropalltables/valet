@@ -12,6 +12,7 @@ import { DockerClient } from './docker/client.js'
 import { EventLog } from './events/log.js'
 import { GitHub, parseGitHubUrl } from './git/github.js'
 import { errorMessage, logger } from './logger.js'
+import { McpServerStore } from './mcp/store.js'
 import { ModelCatalog, STALE_AFTER_MS } from './models/catalog.js'
 import { PortalAuth } from './portals/auth.js'
 import { PortalGateway } from './portals/gateway.js'
@@ -47,7 +48,8 @@ async function main(): Promise<void> {
     return new GitHub(token).defaultBranch(ref).catch(() => null)
   })
   const portalUrls = new PortalUrls(cfg)
-  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings, portalUrls })
+  const mcp = new McpServerStore(db, cipher)
+  const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings, portalUrls, mcp })
   const catalog = new ModelCatalog(db, docker, credentials)
   const deviceLogins = new DeviceLoginManager(db, docker, credentials, () => void catalog.refresh('codex'))
   const auth = new Auth(cfg, cipher)
@@ -56,7 +58,7 @@ async function main(): Promise<void> {
   auth.onLogout(() => portalAuth.revokeOwners())
   const portals = new PortalGateway({ cfg, urls: portalUrls, portalAuth, auth, threads })
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, projects, threads, portals })
+  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, projects, threads, portals, mcp })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
     log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server

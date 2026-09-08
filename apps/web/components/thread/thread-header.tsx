@@ -125,6 +125,7 @@ export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, 
         </span>
         <span>{thread.permissions === 'ask' ? 'Ask' : 'Auto'}</span>
         {cost && <span className="tabular-nums">{cost}</span>}
+        {thread.mcpServers > 0 && <span className="tabular-nums">{thread.mcpServers} MCP</span>}
         {serviceCount > 0 && (
           <button type="button" onClick={onOpenServices} className="tabular-nums hover:text-foreground">
             {serviceCount} {serviceCount === 1 ? 'service' : 'services'}

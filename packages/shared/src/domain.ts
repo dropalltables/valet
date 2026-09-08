@@ -119,6 +119,35 @@ export type ProjectEnvVar = {
   kind: 'plain' | 'secret'
 }
 
+/**
+ * MCP servers Valet writes into every sandbox the server applies to: Claude Code
+ * gets a generated `--mcp-config` file, Codex `[mcp_servers.*]` in its config.toml.
+ */
+export type McpServerType = 'http' | 'stdio'
+
+/** `all`: every project. `selected`: only the projects listed in `projectIds`. */
+export type McpServerScope = 'all' | 'selected'
+
+/** Names become tool prefixes (`mcp__<name>__<tool>`) and config keys. */
+export const MCP_SERVER_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/
+
+/** One header (http) or environment variable (stdio). Values stay in core, encrypted at rest. */
+export type McpValue = { name: string }
+
+export type McpServer = {
+  id: string
+  /** `MCP_SERVER_NAME_RE` */
+  name: string
+  enabled: boolean
+  scope: McpServerScope
+  /** Projects the server applies to when `scope === 'selected'`; empty otherwise. */
+  projectIds: string[]
+  updatedAt: string
+} & (
+  | { type: 'http'; url: string; headers: McpValue[] }
+  | { type: 'stdio'; command: string; args: string[]; env: McpValue[] }
+)
+
 export type PullRequestState = 'open' | 'merged' | 'closed'
 
 export type Thread = {
@@ -327,6 +356,12 @@ export type Settings = {
   defaultAgent: AgentKind
   defaultModel: Record<AgentKind, string>
   defaultPermissions: PermissionPolicy
+  /**
+   * Whether the servers a repository declares in its own `.mcp.json` are merged
+   * into the config Valet writes. Off by default: they start processes in the
+   * sandbox at launch, before the agent or an approval is involved.
+   */
+  allowProjectMcpJson: boolean
 }
 
 /** Slug for branch names and container names: lowercase, hyphens, max 40 chars. */
@@ -360,6 +395,10 @@ export const SANDBOX = {
   portsFile: '/home/valet/workspace/repo/.valet/ports.json',
   /** Declared services, committed to the repo; see `services.yaml` in the README. */
   servicesYaml: '/home/valet/workspace/repo/.valet/services.yaml',
+  /** MCP servers the repository declares; when it exists, Claude Code loads it alongside Valet's. */
+  projectMcpJson: '/home/valet/workspace/repo/.mcp.json',
+  /** Valet's generated MCP servers, written 0600 at launch and passed to Claude Code as `--mcp-config`. */
+  mcpConfig: '/home/valet/.valet/mcp.json',
   /** Service registry (source of truth for supervisord units), on the home volume. */
   servicesFile: '/home/valet/.valet/services.json',
   /** `<name>.log` per service, rotated by supervisord. */

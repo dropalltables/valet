@@ -162,7 +162,7 @@ export class ModelCatalog {
         if (!codex) throw new Error('unreachable')
         const env: Record<string, string> = { HOME: SANDBOX.home, CODEX_HOME: SANDBOX.codexHome }
         if (codex.mode === 'api-key') env.CODEX_API_KEY = codex.apiKey
-        await writeCodexHome(supervisor, codex.mode === 'oauth' ? codex.authJson : null)
+        await writeCodexHome(supervisor, codex.mode === 'oauth' ? codex.authJson : null, [])
         try {
           return await listCodexModels({ runner: exec, cwd: SANDBOX.home, env, timeoutMs: remainingMs() })
         } finally {

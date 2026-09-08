@@ -108,6 +108,8 @@ function startOptions(rec: ReturnType<typeof recorder>, extra: Partial<Parameter
     permissions: 'ask' as const,
     env: { PATH: process.env.PATH ?? '' },
     resumeSessionId: null,
+    mcpConfigPath: null,
+    allowProjectMcp: false,
     systemPromptSuffix: 'test',
     ...rec,
     ...extra,
