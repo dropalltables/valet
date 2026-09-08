@@ -141,7 +141,7 @@ function Composer() {
             <PromptInputSelect
               value={effectiveBranch ?? ''}
               onValueChange={setBaseBranch}
-              disabled={!project || branches.length <= 1}
+              disabled={!project}
             >
               <PromptInputSelectTrigger size="sm" aria-label="Base branch" className="font-mono text-xs">
                 <PromptInputSelectValue placeholder="Branch" />
