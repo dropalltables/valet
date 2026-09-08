@@ -72,8 +72,8 @@ function ThreadBody({
         project={project}
         costUsd={stream.transcript.totalCostUsd || thread.costUsd}
         actions={actions}
-        portalCount={stream.portals.length}
-        onOpenPortals={() => setTab('portals')}
+        serviceCount={stream.services.length}
+        onOpenServices={() => setTab('services')}
       />
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize="55" minSize="30" className="flex min-w-0 flex-col">
@@ -88,7 +88,7 @@ function ThreadBody({
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize="45" minSize="20" className="min-w-0">
-          <RightPane thread={thread} project={project} actions={actions} portals={stream.portals} tab={tab} onTabChange={setTab} />
+          <RightPane thread={thread} project={project} actions={actions} portals={stream.portals} services={stream.services} tab={tab} onTabChange={setTab} />
         </ResizablePanel>
       </ResizablePanelGroup>
       <CreatePrDialog thread={thread} open={actions.prOpen} onOpenChange={actions.setPrOpen} onCreated={patchThread} />

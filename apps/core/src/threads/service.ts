@@ -6,12 +6,15 @@ import {
   slugify,
   type ChangesResponse,
   type CreatePrRequest,
+  type CreateServiceReply,
+  type CreateServiceRequest,
   type CreateThreadRequest,
   type FileEntry,
   type FileResponse,
   type FilesResponse,
   type Portal,
   type SendMessageRequest,
+  type Service,
   type Thread,
   type ThreadEvent,
   type ThreadListItem,
@@ -36,7 +39,7 @@ import { computeChanges, git } from '../git/changes.js'
 import { GitHub, cloneUrl, requireRepoRef } from '../git/github.js'
 import { newId, shortHex } from '../ids.js'
 import { errorMessage, logger } from '../logger.js'
-import { PortalPoller } from '../portals/poller.js'
+import { SandboxPoller } from '../portals/poller.js'
 import type { PortalUrls } from '../portals/urls.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SettingsService } from '../settings.js'
@@ -47,6 +50,7 @@ import {
   repoExists,
   repoGit,
   runResume,
+  runServicesEnsure,
   runSetup,
   syncCodexAuth,
   writeCodexHome,
@@ -65,7 +69,7 @@ const FILE_CONTENT_LIMIT = 1024 * 1024
 
 type QueuedMessage = { turnId: string; text: string; images: PromptImage[] }
 
-type LiveSandbox = { containerId: string; supervisor: SupervisorClient; exec: ExecSocket | null; portals: PortalPoller }
+type LiveSandbox = { containerId: string; supervisor: SupervisorClient; exec: ExecSocket | null; poller: SandboxPoller }
 
 /** Where a portal request for a thread should go. */
 export type PortalTarget =
@@ -321,21 +325,22 @@ export class ThreadService {
 
   private dropSandbox(live: Live): void {
     live.sandbox?.exec?.close()
-    live.sandbox?.portals.stop()
+    live.sandbox?.poller.stop()
     live.sandbox = null
   }
 
-  /** Records a reachable supervisor for the thread and starts watching its ports; a previous handle's poller stops first. */
+  /** Records a reachable supervisor for the thread and starts watching its ports and services; a previous handle's poller stops first. */
   private attachSandbox(live: Live, containerId: string, supervisor: SupervisorClient): LiveSandbox {
     if (live.sandbox) this.dropSandbox(live)
-    const portals = new PortalPoller(live.id, supervisor, {
+    const poller = new SandboxPoller(live.id, supervisor, {
       excludePids: () => (live.adapter?.pid == null ? [] : [live.adapter.pid]),
-      onChange: (list) => void this.setPortals(live.id, list),
+      onPortals: (list) => void this.setPortals(live.id, list),
+      onServices: (list, changed) => void this.setServices(live.id, list, changed),
       onUnreachable: () => void this.checkSandbox(live.id).catch((err) => log.warn('sandbox check failed', { id: live.id, err })),
     })
-    const sandbox: LiveSandbox = { containerId, supervisor, exec: null, portals }
+    const sandbox: LiveSandbox = { containerId, supervisor, exec: null, poller }
     live.sandbox = sandbox
-    portals.start()
+    poller.start()
     return sandbox
   }
 
@@ -403,6 +408,12 @@ export class ThreadService {
 
     let containerId = row.containerId
     let state = containerId ? await this.docker.inspect(containerId) : null
+    // A stopped container from a superseded image would wake with the old supervisor; the volume carries everything that matters.
+    if (state && !state.running && (await this.docker.imageChanged(state))) {
+      this.sink(row.id)('info', 'Recreating sandbox')
+      await this.docker.remove(state.id)
+      state = null
+    }
     let created = false
     if (!state) {
       await this.ensureCapacity(row.id)
@@ -495,6 +506,8 @@ export class ThreadService {
       const hasSetup = await runSetup(sandbox.supervisor, exec, projectEnv, sink, signal)
       if (project.hasSetupScript !== hasSetup) await this.projects.setHasSetupScript(project.id, hasSetup)
       signal.throwIfAborted()
+      await runServicesEnsure(sandbox.supervisor, exec, sink, signal)
+      signal.throwIfAborted()
       await this.patch(id, { repoReady: true })
       await this.setStatus(id, 'idle')
       if (first) await this.enqueueTurn(live, first)
@@ -516,6 +529,7 @@ export class ThreadService {
       const projectEnv = this.sandboxEnv(id, await this.projects.decryptedEnv(row.projectId))
       await writeEnvFile(sandbox.supervisor, projectEnv)
       await runResume(sandbox.supervisor, exec, projectEnv, this.sink(id))
+      await runServicesEnsure(sandbox.supervisor, exec, this.sink(id))
     }
     if (row.status === 'paused' || row.status === 'error') await this.setStatus(id, 'idle')
   }
@@ -917,6 +931,63 @@ export class ThreadService {
   async openRelay(id: string, kind: 'pty' | 'vnc'): Promise<WebSocket> {
     const { supervisor } = await this.requireRunning(id)
     return supervisor.openSocket(`/${kind}`)
+  }
+
+  // ---- services ----------------------------------------------------------------------------
+
+  /** Persists only material changes; uptime ticks are published without a write. */
+  private async setServices(id: string, services: Service[], changed: boolean): Promise<void> {
+    if (!changed) {
+      this.events.publishServices(id, services)
+      return
+    }
+    try {
+      const [row] = await this.db.update(threads).set({ services }).where(eq(threads.id, id)).returning()
+      if (row) this.events.publishServices(id, row.services ?? [])
+    } catch (err) {
+      log.warn('failed to store services', { id, err })
+    }
+  }
+
+  /** Last known managed services; the list persists while the container is paused. */
+  async services(id: string): Promise<Service[]> {
+    return (await this.row(id)).services ?? []
+  }
+
+  private async refreshServices(id: string, supervisor: SupervisorClient): Promise<void> {
+    const services = await supervisor.services().catch(() => null)
+    if (services) await this.setServices(id, services, true)
+  }
+
+  async createService(id: string, req: CreateServiceRequest): Promise<CreateServiceReply> {
+    const { supervisor } = await this.requireRunning(id)
+    const reply = await supervisor.createService(req)
+    await this.refreshServices(id, supervisor)
+    return reply
+  }
+
+  async serviceAction(id: string, name: string, action: 'start' | 'stop' | 'restart'): Promise<CreateServiceReply> {
+    const { supervisor } = await this.requireRunning(id)
+    const reply = await supervisor.serviceAction(name, action)
+    await this.refreshServices(id, supervisor)
+    return reply
+  }
+
+  async removeService(id: string, name: string): Promise<void> {
+    const { supervisor } = await this.requireRunning(id)
+    await supervisor.removeService(name)
+    await this.refreshServices(id, supervisor)
+  }
+
+  async serviceLogs(id: string, name: string, lines: number): Promise<string> {
+    const { supervisor } = await this.requireRunning(id)
+    return supervisor.serviceLogs(name, lines)
+  }
+
+  /** Upstream socket for the log tail relay; 409 when the container is not running. */
+  async openServiceLogs(id: string, name: string, lines: number): Promise<WebSocket> {
+    const { supervisor } = await this.requireRunning(id)
+    return supervisor.openSocket(supervisor.serviceLogsPath(name, lines))
   }
 
   // ---- portals -----------------------------------------------------------------------------

@@ -24,12 +24,21 @@ type Route =
   | { kind: 'global' }
   | { kind: 'stream'; id: string; since: number }
   | { kind: 'relay'; id: string; target: 'pty' | 'vnc' }
+  | { kind: 'logs'; id: string; name: string; lines: number }
   | { kind: 'portal'; threadId: string; port: string }
+
+const DEFAULT_LOG_LINES = 200
+const MAX_LOG_LINES = 10_000
 
 function route(url: URL): Route | null {
   if (url.pathname === '/api/stream') return { kind: 'global' }
   const portal = /^\/portal\/([^/]+)\/([^/]+)(?:\/|$)/.exec(url.pathname)
   if (portal && portal[1] && portal[2]) return { kind: 'portal', threadId: portal[1], port: portal[2] }
+  const logs = /^\/api\/threads\/([^/]+)\/services\/([^/]+)\/logs$/.exec(url.pathname)
+  if (logs && logs[1] && logs[2]) {
+    const lines = Number(url.searchParams.get('lines') ?? DEFAULT_LOG_LINES)
+    return { kind: 'logs', id: logs[1], name: logs[2], lines: Number.isInteger(lines) && lines >= 0 ? Math.min(lines, MAX_LOG_LINES) : DEFAULT_LOG_LINES }
+  }
   const m = /^\/api\/threads\/([^/]+)\/(stream|pty|vnc)$/.exec(url.pathname)
   if (!m || !m[1]) return null
   if (m[2] === 'stream') {
@@ -78,7 +87,10 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
             void serveStream(ws, deps, target.id, target.since)
             return
           case 'relay':
-            void serveRelay(ws, deps, target.id, target.target)
+            void serveRelay(ws, deps, target.id, () => deps.threads.openRelay(target.id, target.target))
+            return
+          case 'logs':
+            void serveRelay(ws, deps, target.id, () => deps.threads.openServiceLogs(target.id, target.name, target.lines))
             return
         }
       })
@@ -159,19 +171,21 @@ async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: numbe
   sendJson(ws, { t: 'thread', thread: row } satisfies StreamFrame)
   const portals = await deps.threads.portals(id).catch(() => [])
   sendJson(ws, { t: 'portals', portals } satisfies StreamFrame)
+  const services = await deps.threads.services(id).catch(() => [])
+  sendJson(ws, { t: 'services', services } satisfies StreamFrame)
   sendJson(ws, { t: 'live' } satisfies StreamFrame)
 }
 
-async function serveRelay(ws: WebSocket, deps: WsDeps, id: string, target: 'pty' | 'vnc'): Promise<void> {
+async function serveRelay(ws: WebSocket, _deps: WsDeps, id: string, open: () => Promise<WebSocket>): Promise<void> {
   const held = holdBrowserFrames(ws)
   let upstream: WebSocket
   try {
-    upstream = await deps.threads.openRelay(id, target)
+    upstream = await open()
   } catch (err) {
     held.release()
     const status = err instanceof HttpError ? err.status : 500
     const code = status === 404 ? CLOSE_NOT_FOUND : status === 409 ? CLOSE_PAUSED : CLOSE_ERROR
-    log.debug('relay refused', { id, target, message: errorMessage(err) })
+    log.debug('relay refused', { id, message: errorMessage(err) })
     ws.close(code, status === 409 ? 'paused' : errorMessage(err).slice(0, 120))
     return
   }

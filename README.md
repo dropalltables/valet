@@ -76,16 +76,23 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
 - **Git.** GitHub credentials never sit in the container. Pushes and pull requests
   run through core with a short-lived credential helper.
 - **Desktop and terminal.** Every sandbox runs a VNC desktop (Xfce, Chromium) and a
-  shared tmux session; both are relayed through core, so no extra ports are exposed.
+  tmux session for the Terminal tab (the user's own shell, separate from the agent);
+  both are relayed through core, so no extra ports are exposed.
+- **Services.** Long-lived processes (dev servers, watchers) run as supervised
+  services inside the sandbox: the agent registers them with `valet service start`,
+  or the repository declares them in `.valet/services.yaml` (below). Services with a port get
+  `PORT` and `PUBLIC_URL`, restart when the sandbox wakes, and appear in the Services
+  tab with logs and Start, Stop, Restart, and Remove controls.
 - **Portals.** Every TCP port listening inside a running sandbox is reachable at
   `http://t-<thread>-p<port>.localhost:3000` (or `https://t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`
   on a server). The web app matches the hostname and forwards the whole request,
   WebSockets included, through core into the sandbox, where the supervisor connects to
   `127.0.0.1:<port>` with `Host: localhost:<port>`, so dev servers that bind to
   localhost work unchanged. Browsers resolve `*.localhost` to loopback, so nothing
-  needs configuring locally. The Portals tab lists the ports (named by an optional
-  committed `.valet/ports.json`, e.g. `{ "3000": "web" }`) and embeds one in a
-  mini-browser; the agent knows the URL template through `VALET_PORTAL_URL_TEMPLATE`.
+  needs configuring locally. The Services tab lists the ports (named after the
+  service that owns them, else by an optional committed `.valet/ports.json`, e.g.
+  `{ "3000": "web" }`) and embeds one in a mini-browser; the agent knows the URL
+  template through `VALET_PORTAL_URL_TEMPLATE`.
   With `VALET_PASSWORD` set, a portal host gets its own cookie after a redirect
   through the main host (logging out revokes those cookies), and *Share* issues
   links that open one portal for 1 hour to 7 days without a login. Request bodies
@@ -96,10 +103,47 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
 Commit these to the repository:
 
 - `.valet/setup`: runs once after clone (install dependencies, build). Must be idempotent.
-- `.valet/resume`: runs every time the container wakes (start dev servers).
+  Anything it leaves running in its process group is stopped when it exits.
+- `.valet/services.yaml`: services to keep running (below).
+- `.valet/resume`: runs every time the container wakes, for one-off work that is not a service.
 
 Project environment variables and secrets are set in the project's settings page and
-are available to both scripts and the agent.
+are available to the scripts, the services, and the agent.
+
+### Services
+
+```yaml
+services:
+  web:
+    command: npm run dev -- --port $PORT
+    cwd: apps/web            # default: the repository root
+    portal: true             # or { path: /docs, title: Docs }
+    health: /                # GET must answer 2xx/3xx before the service counts as ready
+  api:
+    command: uv run uvicorn app:app --port $PORT
+    port: 8000               # default: assigned from 30000-32767
+    env:
+      WEB_URL: ${services.web.publicURL}
+  worker:
+    command: npm run worker  # no port: PORT and PUBLIC_URL are not set
+```
+
+A service has a port when it sets `port`, `portal`, or `health`. It runs as user
+`valet` in a login shell with the project environment, `PORT`, `PUBLIC_URL` (its portal
+URL), `VALET_THREAD_ID`, and `VALET_SERVICE` set; it is restarted when it exits and
+started again when the sandbox wakes. Logs go to `~/.valet/logs/<name>.log`.
+`valet services ensure` applies the file; core runs it after `.valet/setup` and on
+every wake. Inside the sandbox the agent (and the Terminal tab) can also manage
+services ad hoc:
+
+```sh
+valet service start web --command 'npm run dev -- --port $PORT' --portal
+valet service list
+valet service logs web -f
+valet service restart web
+valet service remove web
+valet portal 8000            # the portal URL for any port
+```
 
 ## Configuration
 

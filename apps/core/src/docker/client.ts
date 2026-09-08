@@ -21,7 +21,7 @@ export type SandboxSpec = {
   portalUrlTemplate: string
 }
 
-export type ContainerState = { id: string; running: boolean; status: string; ip: string | null }
+export type ContainerState = { id: string; running: boolean; status: string; ip: string | null; imageId: string }
 
 export class DockerClient {
   readonly docker: Docker
@@ -163,12 +163,18 @@ export class DockerClient {
     }
   }
 
+  /** Whether the container was created from an image other than the one configured now. */
+  async imageChanged(state: ContainerState): Promise<boolean> {
+    const { imageId } = await this.imageStatus()
+    return imageId !== null && imageId !== state.imageId
+  }
+
   async inspect(id: string): Promise<ContainerState | null> {
     try {
       const info = await this.docker.getContainer(id).inspect()
       const net = info.NetworkSettings.Networks[this.cfg.VALET_DOCKER_NETWORK]
       const ip = net?.IPAddress || Object.values(info.NetworkSettings.Networks)[0]?.IPAddress || null
-      return { id: info.Id, running: info.State.Running, status: info.State.Status, ip }
+      return { id: info.Id, running: info.State.Running, status: info.State.Status, ip, imageId: info.Image }
     } catch (err) {
       if (statusOf(err) === 404) return null
       throw err

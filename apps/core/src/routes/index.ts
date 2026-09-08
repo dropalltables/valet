@@ -4,6 +4,8 @@ import { z } from 'zod'
 import {
   AGENT_LABELS,
   DEFAULT_MODEL,
+  createServiceRequestSchema,
+  serviceNameSchema,
   type AgentInfo,
   type AgentKind,
   type AgentsResponse,
@@ -14,6 +16,7 @@ import {
   type ProjectsResponse,
   type PushResponse,
   type SendMessageResponse,
+  type ServicesResponse,
   type ThreadsResponse,
 } from '@valet/shared'
 import type { Auth } from '../auth.js'
@@ -94,6 +97,14 @@ function parsePort(raw: string): number {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw badRequest('invalid port')
   return port
 }
+
+function parseServiceName(raw: string): string {
+  const parsed = serviceNameSchema.safeParse(raw)
+  if (!parsed.success) throw notFound('service')
+  return parsed.data
+}
+
+const logLinesSchema = z.object({ lines: z.coerce.number().int().min(0).max(10_000).default(200) })
 
 function parseKind(raw: string): CredentialKind {
   const parsed = credentialKind.safeParse(raw)
@@ -354,6 +365,24 @@ export function createApp(deps: AppDeps): Hono {
     await deps.portals.revoke(c.req.param('id'), parsePort(c.req.param('port')))
     return c.body(null, 204)
   })
+
+  app.get('/api/threads/:id/services', async (c) => {
+    const body: ServicesResponse = { services: await deps.threads.services(c.req.param('id')) }
+    return c.json(body)
+  })
+  app.post('/api/threads/:id/services', jsonBody(createServiceRequestSchema), async (c) =>
+    c.json(await deps.threads.createService(c.req.param('id'), c.req.valid('json')), 201),
+  )
+  app.post('/api/threads/:id/services/:name/:action{start|stop|restart}', async (c) =>
+    c.json(await deps.threads.serviceAction(c.req.param('id'), parseServiceName(c.req.param('name')), c.req.param('action') as 'start' | 'stop' | 'restart')),
+  )
+  app.delete('/api/threads/:id/services/:name', async (c) => {
+    await deps.threads.removeService(c.req.param('id'), parseServiceName(c.req.param('name')))
+    return c.body(null, 204)
+  })
+  app.get('/api/threads/:id/services/:name/logs', queryParams(logLinesSchema), async (c) =>
+    c.text(await deps.threads.serviceLogs(c.req.param('id'), parseServiceName(c.req.param('name')), c.req.valid('query').lines)),
+  )
 
   app.post('/api/threads/:id/push', async (c) => {
     const { branch } = await deps.threads.push(c.req.param('id'))

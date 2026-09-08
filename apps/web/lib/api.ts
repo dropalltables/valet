@@ -4,6 +4,8 @@ import type {
   ChangesResponse,
   CreatePrRequest,
   CreateProjectRequest,
+  CreateServiceRequest,
+  CreateServiceResponse,
   CreateThreadRequest,
   CredentialKind,
   CredentialStatus,
@@ -28,6 +30,7 @@ import type {
   QuestionAnswerRequest,
   SendMessageRequest,
   SendMessageResponse,
+  ServicesResponse,
   SessionResponse,
   Settings,
   SharePortalRequest,
@@ -69,6 +72,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(res.status, message)
   }
   if (res.status === 204) return undefined as T
+  if (res.headers.get('content-type')?.startsWith('text/plain')) return (await res.text()) as T
   return (await res.json()) as T
 }
 
@@ -151,6 +155,16 @@ export const api = {
       request<SharePortalResponse>(`/api/threads/${id}/portals/${port}/share`, { method: 'POST', body: json(body) }),
     revokePortalShare: (id: string, port: number) =>
       request<void>(`/api/threads/${id}/portals/${port}/share`, { method: 'DELETE' }),
+    services: {
+      list: (id: string) => request<ServicesResponse>(`/api/threads/${id}/services`),
+      create: (id: string, body: CreateServiceRequest) =>
+        request<CreateServiceResponse>(`/api/threads/${id}/services`, { method: 'POST', body: json(body) }),
+      action: (id: string, name: string, action: 'start' | 'stop' | 'restart') =>
+        request<CreateServiceResponse>(`/api/threads/${id}/services/${encodeURIComponent(name)}/${action}`, { method: 'POST' }),
+      remove: (id: string, name: string) => request<void>(`/api/threads/${id}/services/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+      logs: (id: string, name: string, lines: number) =>
+        request<string>(`/api/threads/${id}/services/${encodeURIComponent(name)}/logs${q({ lines })}`),
+    },
     push: (id: string) => request<PushResponse>(`/api/threads/${id}/push`, { method: 'POST' }),
     createPr: (id: string, body: CreatePrRequest) =>
       request<Thread>(`/api/threads/${id}/pr`, { method: 'POST', body: json(body) }),

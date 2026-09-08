@@ -18,7 +18,7 @@ RUN npm ci -w @valet/supervisor --no-audit --no-fund \
  && test -f node_modules/node-pty/build/Release/pty.node \
  && npm run build -w @valet/supervisor \
  && mkdir -p /out/supervisor/node_modules/node-pty/build/Release \
- && cp sandbox/supervisor/dist/index.js /out/supervisor/index.js \
+ && cp sandbox/supervisor/dist/index.js sandbox/supervisor/dist/cli.js /out/supervisor/ \
  && cp -r node_modules/node-pty/lib node_modules/node-pty/package.json node_modules/node-pty/LICENSE /out/supervisor/node_modules/node-pty/ \
  && cp node_modules/node-pty/build/Release/pty.node /out/supervisor/node_modules/node-pty/build/Release/
 
@@ -66,7 +66,9 @@ RUN set -eux; \
       '  export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --load-extension=$(ls -dm /usr/share/chromium/extensions/* | tr -d '"'"'\n'"'"')"' \
       'fi' > /etc/chromium.d/extensions; \
     mkdir -p /valet/repos /home/valet/workspace /home/valet/.claude /home/valet/.codex; \
-    chown -R valet:valet /home/valet /valet
+    chown -R valet:valet /home/valet /valet; \
+    mkdir -p /etc/supervisor/conf.d/services; \
+    chown valet:valet /etc/supervisor/conf.d/services
 
 # Agent CLIs and the browser driver, global and world-readable (npm's prefix is /usr/local here).
 # The platform binaries are optional deps or postinstall downloads; the version checks below fail the build if they did not land.
@@ -83,10 +85,13 @@ RUN npm install -g --include=optional --allow-scripts=@anthropic-ai/claude-code,
 RUN printf '%s\n' 'dangerously-allow-all-scripts=true' 'update-notifier=false' > /usr/local/etc/npmrc
 
 COPY --from=supervisor /out/supervisor /opt/valet/supervisor
-COPY sandbox/supervisord.conf /etc/supervisor/conf.d/valet.conf
+COPY sandbox/supervisord.conf /etc/supervisor/supervisord.conf
 COPY sandbox/entrypoint.sh /usr/local/bin/valet-entrypoint
 COPY sandbox/xfce.sh /usr/local/bin/valet-xfce
+COPY sandbox/run-service.sh /usr/local/bin/valet-run-service
 COPY --chown=valet:valet sandbox/tmux.conf /home/valet/.tmux.conf
+# The `valet` CLI (services, portal URLs) for the agent and the user's terminal; it talks to the supervisor's control socket.
+RUN chmod 755 /opt/valet/supervisor/cli.js && ln -s /opt/valet/supervisor/cli.js /usr/local/bin/valet
 
 ENV HOME=/home/valet \
     USER=valet \

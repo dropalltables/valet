@@ -28,11 +28,14 @@ import type {
   Portal,
   Project,
   ProjectEnvVar,
+  Service,
+  ServiceReadiness,
   Settings,
   Thread,
   ThreadStatus,
 } from './domain.js'
 import type { StoredEvent } from './events.js'
+import type { CreateServiceRequest } from './supervisor.js'
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -277,6 +280,29 @@ export const PORTAL_AUTH_PATH = '/__valet/auth'
 export const PORTAL_WAKE_PATH = '/__valet/wake'
 
 // ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+/**
+ * Managed services inside the sandbox (see `Service`). Core polls the supervisor's
+ * `/services` alongside `/ports` while the container runs and pushes the list as
+ * `{ t: 'services' }` stream frames; the last known list is kept while paused.
+ *
+ * GET    /api/threads/:id/services -> { services }
+ * POST   /api/threads/:id/services CreateServiceRequest -> CreateServiceResponse (201)
+ * POST   /api/threads/:id/services/:name/start|stop|restart -> CreateServiceResponse
+ * DELETE /api/threads/:id/services/:name -> 204
+ * GET    /api/threads/:id/services/:name/logs?lines=200 -> text/plain
+ * WS     /api/threads/:id/services/:name/logs?lines=200 -> ServiceLogsFrame (relayed)
+ *
+ * Everything but GET /services answers 409 `{ error: 'paused' }` while the container
+ * is not running.
+ */
+export type ServicesResponse = { services: Service[] }
+export type { CreateServiceRequest }
+export type CreateServiceResponse = { service: Service; readiness: ServiceReadiness }
+
+// ---------------------------------------------------------------------------
 // WebSockets
 // ---------------------------------------------------------------------------
 
@@ -294,6 +320,8 @@ export type StreamFrame =
   | { t: 'thread'; thread: Thread }
   /** Full current list, sent once after replay and again whenever it changes. */
   | { t: 'portals'; portals: Portal[] }
+  /** Full current list, sent once after replay and on every poll while the sandbox runs. */
+  | { t: 'services'; services: Service[] }
   | { t: 'error'; message: string }
 
 /**
@@ -310,8 +338,8 @@ export type GlobalFrame =
 /**
  * WS /api/threads/:id/pty
  *
- * Interactive shell in the sandbox (a shared tmux session, so the agent and the
- * user see the same terminal). Frames are JSON; terminal bytes are base64.
+ * The user's own shell in the sandbox: a tmux session every viewer attaches to,
+ * separate from the agent. Frames are JSON; terminal bytes are base64.
  */
 export type PtyClientFrame =
   | { t: 'data'; data: string }

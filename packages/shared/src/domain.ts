@@ -164,6 +164,57 @@ export type Portal = {
   shareExpiresAt: string | null
 }
 
+/**
+ * A long-lived process the sandbox supervises (dev server, watcher). Registered
+ * by the agent with `valet service start` or declared in the repo's
+ * `.valet/services.yaml`; runs as a supervisord program inside the container and
+ * comes back on its own when the sandbox wakes.
+ */
+export type ServiceState = 'running' | 'starting' | 'stopped' | 'failed' | 'exited'
+
+/** Mini-browser intent for the port: where to land and what to call it. */
+export type ServicePortal = false | { path: string; title: string }
+
+export type Service = {
+  /** `SERVICE_NAME_RE` */
+  name: string
+  /** Run by `bash -lc` in `cwd`, with `PORT` and `PUBLIC_URL` set when `port` is not null. */
+  command: string
+  cwd: string
+  /** Assigned when the service was created with a port, a portal, or a health path. */
+  port: number | null
+  /** Browser-facing origin for `port`, from `VALET_PORTAL_URL_TEMPLATE`. */
+  url: string | null
+  portal: ServicePortal
+  /** HTTP path probed for readiness (2xx/3xx passes); null means a TCP connect is enough. */
+  health: string | null
+  /** `adhoc`: `valet service start` or the UI; `yaml`: `.valet/services.yaml` via `valet services ensure`. */
+  source: 'adhoc' | 'yaml'
+  state: ServiceState
+  pid: number | null
+  uptimeSeconds: number | null
+  /** Process starts observed since the sandbox booted, beyond the first. */
+  restarts: number
+  /** Exit status of the last exit while `exited`, `failed`, or restarting; null otherwise. */
+  lastExitCode: number | null
+  updatedAt: string
+}
+
+/** How a service answered after start/restart/ensure. */
+export type ServiceReadiness = {
+  ok: boolean
+  /**
+   * `listening`: TCP connect succeeded; `responding`: the health path answered 2xx/3xx;
+   * `not-responding`: nothing within 60 s; `exited`: the process stopped before answering;
+   * `skipped`: the service has no port.
+   */
+  status: 'listening' | 'responding' | 'not-responding' | 'exited' | 'skipped'
+  httpStatus: number | null
+  error: string | null
+}
+
+export const SERVICE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/
+
 /** Portal hostnames: `t-<threadId>-p<port>.<domain>`. Thread ids are lowercase alphanumerics (see core `ids.ts`). */
 export const PORTAL_HOST_RE = /^t-([a-z0-9]+)-p(\d+)\./
 
@@ -307,5 +358,17 @@ export const SANDBOX = {
   vncPort: 5901,
   /** Optional port names for portals, committed to the repo: `{ "3000": "web", "8000": "api" }`. */
   portsFile: '/home/valet/workspace/repo/.valet/ports.json',
+  /** Declared services, committed to the repo; see `services.yaml` in the README. */
+  servicesYaml: '/home/valet/workspace/repo/.valet/services.yaml',
+  /** Service registry (source of truth for supervisord units), on the home volume. */
+  servicesFile: '/home/valet/.valet/services.json',
+  /** `<name>.log` per service, rotated by supervisord. */
+  serviceLogsDir: '/home/valet/.valet/logs',
+  /** `<name>.cmd` and `<name>.env` per service, read by the unit's launcher; user strings never enter supervisord's config syntax. */
+  serviceSpecsDir: '/home/valet/.valet/services',
+  /** The supervisor's tokenless UNIX socket for the `valet` CLI (services, ports, health only). */
+  controlSocket: '/home/valet/.valet/supervisor.sock',
+  /** tmux session behind the Terminal tab; the agent is never told about it. */
+  terminalSession: 'valet-terminal',
   display: ':1',
 } as const

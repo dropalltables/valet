@@ -87,13 +87,43 @@ function thread(overrides) {
   }
 }
 
-/** @type {Map<string, {row: object, events: Array<{seq:number,event:object}>, subscribers: Set<import('ws').WebSocket>}>} */
+/** @type {Map<string, {row: object, events: Array<{seq:number,event:object}>, subscribers: Set<import('ws').WebSocket>, services: object[], portals: object[]}>} */
 const threads = new Map()
 
 function addThread(row, events = []) {
-  threads.set(row.id, { row, events: [], subscribers: new Set() })
+  threads.set(row.id, { row, events: [], subscribers: new Set(), services: [], portals: [] })
   for (const e of events) appendEvent(row.id, e, { silent: true })
   return row
+}
+
+const portalUrl = (threadId, port) => `http://t-${threadId.replace(/[^a-z0-9]/g, '')}-p${port}.localhost:3100`
+
+/** A managed service as the sandbox supervisor would report it. */
+function service(threadId, overrides) {
+  const name = overrides.name
+  const port = overrides.port ?? null
+  return {
+    name,
+    command: 'npm run dev',
+    cwd: '/home/valet/workspace/repo',
+    port,
+    url: port === null ? null : portalUrl(threadId, port),
+    portal: port === null ? false : { path: '/', title: name },
+    health: null,
+    source: 'adhoc',
+    state: 'running',
+    pid: 4242,
+    uptimeSeconds: 754,
+    restarts: 0,
+    lastExitCode: null,
+    updatedAt: ago(12),
+    ...overrides,
+  }
+}
+
+function publishServices(id) {
+  const t = threads.get(id)
+  if (t) broadcast(t.subscribers, { t: 'services', services: t.services })
 }
 
 const credentials = {
@@ -438,6 +468,17 @@ async function startThread(row, prompt) {
 {
   const t1 = addThread(thread({ id: 't-idle', title: 'Fix the idle timer comparison', branch: 'valet/idle-timer-fix-7f3a', permissions: 'ask', costUsd: 0.42, lastActivityAt: ago(12), createdAt: ago(45) }))
   threads.get('t-idle').diffStats = { files: 3, additions: 42, deletions: 9 }
+  threads.get('t-idle').services = [
+    service('t-idle', { name: 'web', port: 30000, command: 'bun run dev --port $PORT', source: 'yaml', health: '/healthz', portal: { path: '/', title: 'Web' } }),
+    service('t-idle', { name: 'api', port: 30001, command: 'uv run uvicorn app:app --port $PORT', state: 'starting', pid: 4310, uptimeSeconds: 1, restarts: 2 }),
+    service('t-idle', { name: 'worker', command: 'bun run worker', state: 'failed', pid: null, uptimeSeconds: null, restarts: 10, lastExitCode: 1 }),
+    service('t-idle', { name: 'docs', port: 30002, command: 'mkdocs serve -a 127.0.0.1:$PORT', state: 'stopped', pid: null, uptimeSeconds: null }),
+  ]
+  threads.get('t-idle').portals = [
+    { port: 30000, name: 'web', process: 'bun', url: portalUrl('t-idle', 30000), shareExpiresAt: null },
+    { port: 30001, name: 'api', process: 'python3', url: portalUrl('t-idle', 30001), shareExpiresAt: null },
+    { port: 5555, name: null, process: 'node', url: portalUrl('t-idle', 5555), shareExpiresAt: null },
+  ]
   // Complete transcript, built instantly.
   const seed = async () => {
     const id = t1.id
@@ -909,6 +950,44 @@ async function handle(req, res) {
         if (content === undefined) return fail(res, 404, 'No such file')
         return send(res, 200, { path: p, content, truncated: p === 'README.md', binary: false, size: Buffer.byteLength(content) })
       }
+      case 'portals':
+        return send(res, 200, { portals: t.portals })
+      case 'services': {
+        const name = seg[4]
+        const sub = seg[5]
+        if (!LIVE.has(t.row.status)) return fail(res, 409, 'paused')
+        if (!name) {
+          if (method === 'POST') {
+            const body = await readJson(req)
+            const port = body.port ?? (body.portal || body.health ? 30000 + t.services.length + 10 : null)
+            const created = service(id, { name: body.name, command: body.command, cwd: body.cwd ?? '/home/valet/workspace/repo', port, portal: body.portal ? { path: '/', title: body.name } : false, health: body.health ?? null, uptimeSeconds: 2, updatedAt: now() })
+            t.services = [...t.services.filter((s) => s.name !== created.name), created].sort((a, b) => a.name.localeCompare(b.name))
+            publishServices(id)
+            await sleep(700)
+            return send(res, 201, { service: created, readiness: port === null ? { ok: true, status: 'skipped', httpStatus: null, error: null } : { ok: true, status: 'listening', httpStatus: null, error: null } })
+          }
+          return send(res, 200, { services: t.services })
+        }
+        const svc = t.services.find((s) => s.name === name)
+        if (!svc) return fail(res, 404, `no service named ${name}`)
+        if (sub === 'logs') {
+          res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+          return res.end(Array.from({ length: 30 }, (_, i) => `${new Date(Date.now() - (30 - i) * 1000).toISOString()} ${svc.name}: line ${i + 1}\n`).join(''))
+        }
+        if (method === 'DELETE') {
+          t.services = t.services.filter((s) => s.name !== name)
+          publishServices(id)
+          return send(res, 204)
+        }
+        if (method === 'POST' && (sub === 'start' || sub === 'stop' || sub === 'restart')) {
+          await sleep(500)
+          Object.assign(svc, sub === 'stop' ? { state: 'stopped', pid: null, uptimeSeconds: null } : { state: 'running', pid: 5000 + Math.floor(Math.random() * 100), uptimeSeconds: 1, lastExitCode: null, restarts: sub === 'restart' ? svc.restarts + 1 : svc.restarts })
+          publishServices(id)
+          const readiness = sub === 'stop' || svc.port === null ? { ok: true, status: 'skipped', httpStatus: null, error: null } : { ok: true, status: svc.health ? 'responding' : 'listening', httpStatus: svc.health ? 200 : null, error: null }
+          return send(res, 200, { service: svc, readiness })
+        }
+        return fail(res, 404, 'Not found')
+      }
       case 'push':
         await sleep(600)
         return send(res, 200, { branch: t.row.branch, pushed: true })
@@ -960,15 +1039,23 @@ server.on('upgrade', (req, socket, head) => {
           const since = Number(url.searchParams.get('since') ?? 0)
           for (const e of t.events) if (e.seq > since) ws.send(JSON.stringify({ t: 'event', seq: e.seq, event: e.event }))
           ws.send(JSON.stringify({ t: 'thread', thread: t.row }))
+          ws.send(JSON.stringify({ t: 'portals', portals: t.portals }))
+          ws.send(JSON.stringify({ t: 'services', services: t.services }))
           ws.send(JSON.stringify({ t: 'live' }))
           t.subscribers.add(ws)
           ws.on('close', () => t.subscribers.delete(ws))
+          // Uptime ticks like the real poller.
+          const tick = setInterval(() => {
+            for (const s of t.services) if (s.state === 'running' && s.uptimeSeconds !== null) s.uptimeSeconds += 3
+            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'services', services: t.services }))
+          }, 3000)
+          ws.on('close', () => clearInterval(tick))
           return
         }
         case 'pty': {
           if (!LIVE.has(t.row.status)) return ws.close(4009, t.row.status)
           const write = (s) => ws.send(JSON.stringify({ t: 'data', data: Buffer.from(s, 'utf8').toString('base64') }))
-          write(`\x1b[2mvalet mock pty (tmux: main)\x1b[0m\r\nvalet@sandbox:~/workspace/repo$ `)
+          write(`\x1b[2mvalet mock pty (tmux: valet-terminal)\x1b[0m\r\nvalet@sandbox:~/workspace/repo$ `)
           let line = ''
           ws.on('message', (raw) => {
             const frame = JSON.parse(String(raw))
@@ -992,6 +1079,17 @@ server.on('upgrade', (req, socket, head) => {
               }
             }
           })
+          return
+        }
+        case 'services': {
+          const svc = t.services.find((s) => s.name === seg[4])
+          if (!svc || seg[5] !== 'logs') return ws.close(4004, 'Not found')
+          const lines = Number(url.searchParams.get('lines') ?? 200)
+          const frame = (text) => JSON.stringify({ t: 'data', data: Buffer.from(text, 'utf8').toString('base64') })
+          ws.send(frame(Array.from({ length: Math.min(lines, 40) }, (_, i) => `${new Date(Date.now() - (40 - i) * 1000).toISOString()} \x1b[32mready\x1b[0m ${svc.name} request ${i + 1}\n`).join('')))
+          let n = 0
+          const timer = setInterval(() => ws.readyState === ws.OPEN && ws.send(frame(`${now()} ${svc.name} tick ${++n}\n`)), 1500)
+          ws.on('close', () => clearInterval(timer))
           return
         }
         case 'vnc':

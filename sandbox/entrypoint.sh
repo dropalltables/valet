@@ -14,4 +14,9 @@ chmod 1777 /tmp/.X11-unix /tmp/.ICE-unix
 # a stale socket makes dbus-daemon refuse to bind.
 rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 /run/user/1000/bus
 
+# Service units log here; supervisord opens the files as root before the Node
+# supervisor (which normally creates the directory) has started.
+mkdir -p /home/valet/.valet/logs
+chown valet:valet /home/valet/.valet /home/valet/.valet/logs
+
 exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf

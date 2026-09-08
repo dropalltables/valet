@@ -8,11 +8,12 @@ import { rawToBuffer } from './http.js'
 const DEFAULT_SIZE = { cols: 120, rows: 30 }
 /** How long to wait for the client's first resize before attaching at the default size. */
 const FIRST_FRAME_WAIT_MS = 500
-const SESSION = 'main'
 
 /**
- * One tmux client per socket, all attached to the same session. Closing the socket
- * kills the client; the session and whatever runs in it stay.
+ * One tmux client per socket, all attached to the user's session, which is created
+ * on first attach and never shared with the agent. Closing the socket kills the
+ * client; the session and whatever runs in it stay. The status line is off: one
+ * viewer, one shell, nothing to switch between.
  */
 export function handlePty(ws: WebSocket): void {
   let pty: IPty | null = null
@@ -26,7 +27,7 @@ export function handlePty(ws: WebSocket): void {
   const attach = (size: { cols: number; rows: number }): void => {
     if (pty || closed) return
     const cwd = existsSync(SANDBOX.repo) ? SANDBOX.repo : SANDBOX.home
-    pty = spawnPty('tmux', ['new-session', '-A', '-s', SESSION, '-c', cwd], {
+    pty = spawnPty('tmux', ['new-session', '-A', '-s', SANDBOX.terminalSession, '-c', cwd, ';', 'set-option', 'status', 'off'], {
       name: 'xterm-256color',
       cols: Math.max(1, size.cols),
       rows: Math.max(1, size.rows),

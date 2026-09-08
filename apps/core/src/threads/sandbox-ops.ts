@@ -3,6 +3,7 @@ import type { ExecSocket, SupervisorClient } from '../docker/supervisor-client.j
 import type { CodexAuthJson, CredentialStore } from '../credentials/store.js'
 import { withAskpass } from '../git/askpass.js'
 import { git, type GitRunner } from '../git/changes.js'
+import { errorMessage } from '../logger.js'
 
 export const ENV_FILE = `${SANDBOX.home}/.valet/env`
 const SETUP_SCRIPT = '.valet/setup'
@@ -10,6 +11,8 @@ const RESUME_SCRIPT = '.valet/resume'
 const CLONE_TIMEOUT_MS = 15 * 60_000
 const SETUP_TIMEOUT_MS = 20 * 60_000
 const RESUME_WAIT_MS = 10_000
+/** `valet services ensure` waits up to a minute per service, in parallel, plus the supervisord round trips. */
+const ENSURE_TIMEOUT_MS = 3 * 60_000
 
 export type LogSink = (level: 'info' | 'warn' | 'error', message: string) => void
 
@@ -74,22 +77,23 @@ async function isExecutable(supervisor: SupervisorClient, relPath: string): Prom
 }
 
 /**
- * Streams a project script's output as log lines. Resolves with the exit code, or
- * null when `timeoutMs` elapsed first (the process keeps running when detached).
+ * Streams a command's output as log lines. Resolves with the exit code, or null
+ * when `timeoutMs` elapsed first (the process keeps running when detached).
  * Aborting `signal` stops the process and throws the signal's reason.
  */
 async function runScript(
   exec: ExecSocket,
-  relPath: string,
+  argv: string[],
   env: Record<string, string>,
   sink: LogSink,
-  opts: { timeoutMs: number; detach: boolean; signal?: AbortSignal },
+  opts: { timeoutMs: number; detach: boolean; killGroupOnExit?: boolean; signal?: AbortSignal },
 ): Promise<number | null> {
   opts.signal?.throwIfAborted()
-  const proc = await exec.spawn({ argv: [`./${relPath}`], cwd: SANDBOX.repo, env, detach: opts.detach })
+  const what = argv.join(' ')
+  const proc = await exec.spawn({ argv, cwd: SANDBOX.repo, env, detach: opts.detach, ...(opts.killGroupOnExit ? { killGroupOnExit: true } : {}) })
   proc.onStdoutLine((line) => sink('info', line))
   proc.onStderr((chunk) => {
-    for (const line of chunk.split('\n')) if (line.trim()) sink('info', line)
+    for (const line of chunk.split('\n')) if (line.trim()) sink(argv[0] === 'valet' ? 'warn' : 'info', line)
   })
   let timer: NodeJS.Timeout | undefined
   const onAbort = { fn: (): void => undefined }
@@ -111,7 +115,7 @@ async function runScript(
     if (outcome.kind === 'timeout') {
       if (!opts.detach) {
         await proc.signal('SIGTERM')
-        sink('warn', `${relPath} did not finish within ${Math.round(opts.timeoutMs / 60_000)} minutes and was stopped`)
+        sink('warn', `${what} did not finish within ${Math.round(opts.timeoutMs / 60_000)} minutes and was stopped`)
       }
       return null
     }
@@ -131,7 +135,8 @@ export async function runSetup(
 ): Promise<boolean> {
   if (!(await isExecutable(supervisor, SETUP_SCRIPT))) return false
   sink('info', `Running ${SETUP_SCRIPT}`)
-  const code = await runScript(exec, SETUP_SCRIPT, env, sink, { timeoutMs: SETUP_TIMEOUT_MS, detach: false, ...(signal ? { signal } : {}) })
+  // Servers belong in services; whatever setup leaves running in its process group is stopped with it.
+  const code = await runScript(exec, [`./${SETUP_SCRIPT}`], env, sink, { timeoutMs: SETUP_TIMEOUT_MS, detach: false, killGroupOnExit: true, ...(signal ? { signal } : {}) })
   if (code === 0) sink('info', `${SETUP_SCRIPT} finished`)
   else if (code !== null) sink('warn', `${SETUP_SCRIPT} exited with code ${code}`)
   return true
@@ -140,8 +145,27 @@ export async function runSetup(
 export async function runResume(supervisor: SupervisorClient, exec: ExecSocket, env: Record<string, string>, sink: LogSink): Promise<void> {
   if (!(await isExecutable(supervisor, RESUME_SCRIPT))) return
   sink('info', `Running ${RESUME_SCRIPT}`)
-  const code = await runScript(exec, RESUME_SCRIPT, env, sink, { timeoutMs: RESUME_WAIT_MS, detach: true })
+  const code = await runScript(exec, [`./${RESUME_SCRIPT}`], env, sink, { timeoutMs: RESUME_WAIT_MS, detach: true })
   if (code !== null && code !== 0) sink('warn', `${RESUME_SCRIPT} exited with code ${code}`)
+}
+
+/**
+ * Applies `.valet/services.yaml` through the in-sandbox CLI so the log shows what
+ * the agent would see. Failures are warnings: a service that does not come up is
+ * the project's problem, not the thread's.
+ */
+export async function runServicesEnsure(supervisor: SupervisorClient, exec: ExecSocket, sink: LogSink, signal?: AbortSignal): Promise<void> {
+  try {
+    const declared = await supervisor.run({ argv: ['test', '-f', SANDBOX.servicesYaml] }, signal)
+    if (declared.code !== 0) return
+    sink('info', 'Running valet services ensure')
+    const code = await runScript(exec, ['valet', 'services', 'ensure'], {}, sink, { timeoutMs: ENSURE_TIMEOUT_MS, detach: false, ...(signal ? { signal } : {}) })
+    if (code !== null && code !== 0) sink('warn', `valet services ensure exited with code ${code}`)
+  } catch (err) {
+    signal?.throwIfAborted()
+    // A container from an older image has no `valet` CLI; the thread still works without services.
+    sink('warn', `valet services ensure failed: ${errorMessage(err)}`)
+  }
 }
 
 const CODEX_CONFIG = [

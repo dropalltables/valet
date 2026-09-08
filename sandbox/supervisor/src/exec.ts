@@ -6,7 +6,6 @@ import { execClientFrameSchema, type ExecClientFrame, type ExecServerFrame } fro
 import { childEnv } from './env.js'
 import { MiB, rawToBuffer } from './http.js'
 import { isSignal, processes, signalName, sleep, terminate } from './process.js'
-import { ensureTmuxSession } from './tmux.js'
 
 const STDIO_GRACE_MS = 1_000
 /** Outbound bytes queued on the socket before the producing stream is paused. */
@@ -35,8 +34,6 @@ function streamEnded(stream: Readable): Promise<void> {
 
 export function handleExec(ws: WebSocket): void {
   const running = new Map<string, Proc>()
-  /** Ids whose tmux check has not finished; they are neither startable again nor addressable. */
-  const pending = new Set<string>()
   let closed = false
 
   const send = (frame: ExecServerFrame, sent?: () => void): void => {
@@ -91,6 +88,8 @@ export function handleExec(ws: WebSocket): void {
       send({ t: 'error', id: frame.id, message: `spawn failed: ${err.message}` })
     })
     child.once('exit', async (code, signal) => {
+      // The leader is gone; anything it left in the group (a `&` in a setup script) goes with it.
+      if (frame.killGroupOnExit && proc.pid > 0) terminate(-proc.pid)
       await Promise.race([Promise.all([streamEnded(child.stdout), streamEnded(child.stderr)]), sleep(STDIO_GRACE_MS)])
       drain(child.stdout)
       drain(child.stderr)
@@ -118,36 +117,20 @@ export function handleExec(ws: WebSocket): void {
     send({ t: 'started', id: frame.id, pid: pty.pid })
     pty.onData(relay(pty, frame.id, 'stdout'))
     pty.onExit(({ exitCode, signal }) => {
+      if (frame.killGroupOnExit && pty.pid > 0) terminate(-pty.pid)
       if (signal) finished(frame.id, null, signalName(signal))
       else finished(frame.id, exitCode, null)
     })
   }
 
-  /**
-   * The process is most likely the agent, which is told that the tmux session
-   * exists; a failure to create it is logged and does not block the spawn.
-   */
-  const start = async (frame: Start): Promise<void> => {
-    pending.add(frame.id)
-    try {
-      await ensureTmuxSession(frame.cwd ?? process.env.HOME ?? '/')
-    } catch (err) {
-      console.error(`tmux session: ${(err as Error).message}`)
-    } finally {
-      pending.delete(frame.id)
-    }
-    if (closed) return
-    if (frame.pty) startPty(frame, frame.pty)
-    else startPipe(frame)
-  }
-
   const handle = (frame: ExecClientFrame): void => {
     if (frame.t === 'start') {
-      if (running.has(frame.id) || pending.has(frame.id)) {
+      if (running.has(frame.id)) {
         send({ t: 'error', id: frame.id, message: 'id already in use' })
         return
       }
-      void start(frame)
+      if (frame.pty) startPty(frame, frame.pty)
+      else startPipe(frame)
       return
     }
 

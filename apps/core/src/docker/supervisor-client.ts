@@ -1,11 +1,17 @@
 import { WebSocket, type RawData } from 'ws'
 import {
+  createServiceReplySchema,
+  ensureReplySchema,
   execServerFrameSchema,
   fsListReplySchema,
   healthReplySchema,
   portsReplySchema,
   runReplySchema,
+  servicesReplySchema,
   type AgentProcess,
+  type CreateServiceReply,
+  type CreateServiceRequest,
+  type EnsureReply,
   type ExecClientFrame,
   type ExecServerFrame,
   type FsListReply,
@@ -14,6 +20,7 @@ import {
   type ProcessRunner,
   type RunReply,
   type RunRequest,
+  type Service,
   type SpawnOptions,
 } from '@valet/shared'
 import { HttpError } from '../errors.js'
@@ -129,7 +136,50 @@ export class SupervisorClient {
     return { url: new URL(`/portal/${port}${pathAndQuery}`, this.baseUrl), headers: this.headers() }
   }
 
-  openSocket(path: '/exec' | '/pty' | '/vnc'): WebSocket {
+  // ---- services ----------------------------------------------------------------------
+
+  async services(): Promise<Service[]> {
+    const res = await this.expectOk(await this.request('/services', { timeoutMs: 5_000 }), 'services')
+    return servicesReplySchema.parse(await res.json()).services
+  }
+
+  /** Creates or replaces; resolves after readiness, which can take up to a minute. */
+  async createService(req: CreateServiceRequest): Promise<CreateServiceReply> {
+    const res = await this.expectOk(
+      await this.request('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req), timeoutMs: 90_000 }),
+      'services',
+    )
+    return createServiceReplySchema.parse(await res.json())
+  }
+
+  async serviceAction(name: string, action: 'start' | 'stop' | 'restart'): Promise<CreateServiceReply> {
+    const res = await this.expectOk(
+      await this.request(`/services/${encodeURIComponent(name)}/${action}`, { method: 'POST', timeoutMs: 90_000 }),
+      `services/${action}`,
+    )
+    return createServiceReplySchema.parse(await res.json())
+  }
+
+  async removeService(name: string): Promise<void> {
+    await this.expectOk(await this.request(`/services/${encodeURIComponent(name)}`, { method: 'DELETE' }), 'services/remove')
+  }
+
+  async serviceLogs(name: string, lines: number): Promise<string> {
+    const res = await this.expectOk(await this.request(`/services/${encodeURIComponent(name)}/logs?lines=${lines}`), 'services/logs')
+    return res.text()
+  }
+
+  async ensureServices(): Promise<EnsureReply> {
+    const res = await this.expectOk(await this.request('/services/ensure', { method: 'POST', timeoutMs: 120_000 }), 'services/ensure')
+    return ensureReplySchema.parse(await res.json())
+  }
+
+  /** `/services/<name>/logs?lines=N` for the browser relay. */
+  serviceLogsPath(name: string, lines: number): string {
+    return `/services/${encodeURIComponent(name)}/logs?lines=${lines}`
+  }
+
+  openSocket(path: string): WebSocket {
     const url = `${this.baseUrl.replace(/^http/, 'ws')}${path}`
     return new WebSocket(url, { headers: this.headers(), perMessageDeflate: false })
   }
@@ -172,7 +222,7 @@ export async function waitForSupervisor(candidates: string[], token: string, tim
 // /exec: ProcessRunner over one multiplexed socket
 // ---------------------------------------------------------------------------
 
-type ExecSpawnOptions = SpawnOptions & { detach?: boolean }
+type ExecSpawnOptions = SpawnOptions & { detach?: boolean; killGroupOnExit?: boolean }
 
 class ExecProcess implements AgentProcess {
   pid: number | null = null
@@ -356,6 +406,7 @@ export class ExecSocket implements ProcessRunner {
           cwd: options.cwd,
           env: options.env,
           ...(options.detach ? { detach: true } : {}),
+          ...(options.killGroupOnExit ? { killGroupOnExit: true } : {}),
         })
       } catch (err) {
         this.starting.delete(id)

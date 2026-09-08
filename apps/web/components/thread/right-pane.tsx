@@ -2,24 +2,25 @@
 
 import dynamic from 'next/dynamic'
 import { useState } from 'react'
-import { LIVE_STATUSES, type Portal, type Project, type ThreadListItem } from '@valet/shared'
+import { LIVE_STATUSES, type Portal, type Project, type Service, type ThreadListItem } from '@valet/shared'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ChangesPanel } from '@/components/panels/changes-panel'
 import { FilesPanel } from '@/components/panels/files-panel'
 import { PaneState } from '@/components/panels/pane-state'
-import { PortalsPanel } from '@/components/panels/portals-panel'
+import { ServicesPanel } from '@/components/panels/services-panel'
 import type { ThreadActions } from '@/components/thread/thread-actions'
 
 const TerminalPanel = dynamic(() => import('@/components/panels/terminal-panel'), { ssr: false })
 const DesktopPanel = dynamic(() => import('@/components/panels/desktop-panel'), { ssr: false })
 
-export type RightPaneTab = 'changes' | 'portals' | 'files' | 'terminal' | 'desktop'
+export type RightPaneTab = 'changes' | 'services' | 'files' | 'terminal' | 'desktop'
 
 export function RightPane({
   thread,
   actions,
   portals,
+  services,
   tab,
   onTabChange,
 }: {
@@ -27,6 +28,7 @@ export function RightPane({
   project: Project | undefined
   actions: ThreadActions
   portals: Portal[]
+  services: Service[]
   tab: RightPaneTab
   onTabChange: (tab: RightPaneTab) => void
 }) {
@@ -34,6 +36,8 @@ export function RightPane({
   // visit and then stay mounted (hidden) to keep their sessions across switches.
   const [visited, setVisited] = useState<ReadonlySet<RightPaneTab>>(() => new Set([tab]))
   const live = LIVE_STATUSES.includes(thread.status)
+  // Rows in the Services tab: managed services plus listening ports no service owns.
+  const rows = services.length + portals.filter((p) => !services.some((s) => s.port === p.port)).length
 
   function select(next: string): void {
     const t = next as RightPaneTab
@@ -47,11 +51,11 @@ export function RightPane({
         <TabsTrigger value="changes" className="flex-none px-2">
           Changes
         </TabsTrigger>
-        <TabsTrigger value="portals" className="flex-none px-2">
-          Portals
-          {portals.length > 0 && (
+        <TabsTrigger value="services" className="flex-none px-2">
+          Services
+          {rows > 0 && (
             <Badge variant="secondary" className="h-4 px-1.5 text-[10px] tabular-nums">
-              {portals.length}
+              {rows}
             </Badge>
           )}
         </TabsTrigger>
@@ -68,8 +72,8 @@ export function RightPane({
       <TabsContent value="changes" className="min-h-0 flex-1">
         <ChangesPanel thread={thread} actions={actions} />
       </TabsContent>
-      <TabsContent value="portals" className="min-h-0 flex-1">
-        <PortalsPanel thread={thread} portals={portals} actions={actions} />
+      <TabsContent value="services" className="min-h-0 flex-1">
+        <ServicesPanel thread={thread} services={services} portals={portals} actions={actions} />
       </TabsContent>
       <TabsContent value="files" className="min-h-0 flex-1">
         <FilesPanel thread={thread} actions={actions} />

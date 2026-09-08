@@ -20,14 +20,30 @@
  *   POST /fs/mkdir { path }     -> 204
  *   GET  /ports?excludePids=    -> PortsReply (TCP ports in LISTEN state, minus 9500 and 5901,
  *                               minus listeners owned by the given pids or their descendants,
- *                               minus loopback-only listeners of `claude`/`codex` processes)
+ *                               minus loopback-only listeners of `claude`/`codex` processes;
+ *                               each port names the registered service that owns it, if any)
  *   ANY  /portal/:port/*        proxied to 127.0.0.1:<port> with Host `localhost:<port>`;
  *                               WebSocket upgrades are tunnelled byte for byte. The
  *                               supervisor's own failures carry `PORTAL_ERROR_HEADER`
  *                               so core can tell them from the app's responses.
+ *
+ * Services (supervisord programs the supervisor writes and drives; see `Service`):
+ *   GET    /services                    -> ServicesReply
+ *   POST   /services                    CreateServiceRequest -> CreateServiceReply (creates or
+ *                                       replaces, starts, waits for readiness)
+ *   POST   /services/ensure             -> EnsureReply (reconcile `.valet/services.yaml`)
+ *   POST   /services/:name/start|stop|restart -> CreateServiceReply (readiness is `skipped` for stop)
+ *   DELETE /services/:name              -> 204 (stops, removes unit, registry entry, logs)
+ *   GET    /services/:name/logs?lines=  -> text/plain, the last `lines` (default 200)
+ *   WS     /services/:name/logs?lines=  ServiceLogsFrame: `tail -F` of the log file
+ *
+ * The same API, minus everything but /health, /ports, and /services*, is served
+ * without a token on the UNIX socket `SANDBOX.controlSocket` for the `valet` CLI
+ * inside the container. /exec, /pty, /vnc, /portal, /fs, and /run answer 403 there.
  */
 
 import { z } from 'zod'
+import { SERVICE_NAME_RE, type Service, type ServiceReadiness } from './domain.js'
 
 export const SUPERVISOR_TOKEN_ENV = 'VALET_SUPERVISOR_TOKEN'
 
@@ -82,6 +98,11 @@ export const execClientFrameSchema = z.discriminatedUnion('t', [
     /** Allocate a pty instead of pipes (for programs that need a tty). */
     pty: z.object({ cols: z.number(), rows: z.number() }).optional(),
     detach: z.boolean().optional(),
+    /**
+     * When the process exits, SIGTERM (then SIGKILL) whatever it left behind in its
+     * process group: for setup scripts, so a stray `&` does not outlive them.
+     */
+    killGroupOnExit: z.boolean().optional(),
   }),
   /** base64 */
   z.object({ t: z.literal('stdin'), id: z.string(), data: z.string() }),
@@ -102,7 +123,7 @@ export const execServerFrameSchema = z.discriminatedUnion('t', [
 ])
 export type ExecServerFrame = z.infer<typeof execServerFrameSchema>
 
-/** /pty: one shell per socket, attached to the shared tmux session `main`. */
+/** /pty: one tmux client per socket, all attached to the session `SANDBOX.terminalSession`. */
 export const ptyClientFrameSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('data'), data: z.string() }),
   z.object({ t: z.literal('resize'), cols: z.number(), rows: z.number() }),
@@ -137,10 +158,90 @@ export const portsReplySchema = z.object({
       pid: z.number().nullable(),
       /** argv[0] basename, else comm. */
       process: z.string().nullable(),
+      /** Registered service assigned this port, if any. */
+      service: z.string().nullable(),
     }),
   ),
 })
 export type PortsReply = z.infer<typeof portsReplySchema>
+
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
+
+export const serviceNameSchema = z.string().regex(SERVICE_NAME_RE, 'service names are 1-32 lowercase letters, digits, or hyphens, starting with a letter or digit')
+
+export const servicePortalSchema = z.union([z.literal(false), z.object({ path: z.string(), title: z.string() })])
+
+export const serviceSchema = z.object({
+  name: z.string(),
+  command: z.string(),
+  cwd: z.string(),
+  port: z.number().nullable(),
+  url: z.string().nullable(),
+  portal: servicePortalSchema,
+  health: z.string().nullable(),
+  source: z.enum(['adhoc', 'yaml']),
+  state: z.enum(['running', 'starting', 'stopped', 'failed', 'exited']),
+  pid: z.number().nullable(),
+  uptimeSeconds: z.number().nullable(),
+  restarts: z.number(),
+  lastExitCode: z.number().nullable(),
+  updatedAt: z.string(),
+}) satisfies z.ZodType<Service>
+
+export const servicesReplySchema = z.object({ services: z.array(serviceSchema) })
+export type ServicesReply = z.infer<typeof servicesReplySchema>
+
+export const serviceReadinessSchema = z.object({
+  ok: z.boolean(),
+  status: z.enum(['listening', 'responding', 'not-responding', 'exited', 'skipped']),
+  httpStatus: z.number().nullable(),
+  error: z.string().nullable(),
+}) satisfies z.ZodType<ServiceReadiness>
+
+/** Names the service may not set itself; the supervisor owns them. */
+export const RESERVED_SERVICE_ENV = ['PORT', 'PUBLIC_URL', 'VALET_THREAD_ID', 'VALET_SERVICE', SUPERVISOR_TOKEN_ENV] as const
+
+export const createServiceRequestSchema = z.object({
+  name: serviceNameSchema,
+  command: z.string().min(1),
+  /** Absolute, or relative to the repo checkout. Defaults to the repo. */
+  cwd: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  /** Explicit port; otherwise one is assigned when `portal` or `health` is set. */
+  port: z.number().int().min(1).max(65535).optional(),
+  /** `true` is `{ path: '/', title: <name> }`. */
+  portal: z.union([z.boolean(), z.object({ path: z.string().optional(), title: z.string().optional() })]).optional(),
+  health: z.string().startsWith('/').optional(),
+})
+export type CreateServiceRequest = z.infer<typeof createServiceRequestSchema>
+
+export const createServiceReplySchema = z.object({ service: serviceSchema, readiness: serviceReadinessSchema })
+export type CreateServiceReply = z.infer<typeof createServiceReplySchema>
+
+/** `valet services ensure --json` */
+export const ensureReplySchema = z.object({
+  ok: z.boolean(),
+  services: z.array(
+    z.object({
+      name: z.string(),
+      ok: z.boolean(),
+      port: z.number().nullable(),
+      url: z.string().nullable(),
+      status: z.enum(['listening', 'responding', 'not-responding', 'exited', 'skipped']),
+      healthStatus: z.number().optional(),
+      healthError: z.string().optional(),
+    }),
+  ),
+  /** Set when the file could not be read or resolved; `services` is then empty. */
+  error: z.string().optional(),
+})
+export type EnsureReply = z.infer<typeof ensureReplySchema>
+
+/** WS /services/:name/logs: base64 chunks of the log file as `tail -F` produces them. */
+export const serviceLogsFrameSchema = z.object({ t: z.literal('data'), data: z.string() })
+export type ServiceLogsFrame = z.infer<typeof serviceLogsFrameSchema>
 
 /** Set on 502s the supervisor generates itself (app not listening, connect timeout). */
 export const PORTAL_ERROR_HEADER = 'x-valet-portal-error'

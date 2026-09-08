@@ -133,9 +133,10 @@ async function processName(pid: number): Promise<string | null> {
  * loopback-only listeners of the agent CLIs themselves or of anything under
  * `excludePids` (the agent process tree). Only loopback, because the agent's own
  * bridges bind there while a dev server it starts from a background shell, also a
- * descendant, is told to bind 0.0.0.0 and must stay visible.
+ * descendant, is told to bind 0.0.0.0 and must stay visible. `serviceByPort` names
+ * the registered service each port was assigned to.
  */
-export async function listPorts(excludePids: number[] = []): Promise<PortsReply> {
+export async function listPorts(excludePids: number[] = [], serviceByPort: Map<number, string> = new Map()): Promise<PortsReply> {
   const sockets = [...(await listenTable('/proc/net/tcp')), ...(await listenTable('/proc/net/tcp6'))].filter(
     (s) => !HIDDEN_PORTS.has(s.port),
   )
@@ -161,7 +162,7 @@ export async function listPorts(excludePids: number[] = []): Promise<PortsReply>
   const ports = await Promise.all(
     [...byPort.entries()]
       .sort(([a], [b]) => a - b)
-      .map(async ([port, pid]) => ({ port, pid, process: pid === null ? null : await nameOf(pid) })),
+      .map(async ([port, pid]) => ({ port, pid, process: pid === null ? null : await nameOf(pid), service: serviceByPort.get(port) ?? null })),
   )
   return { ports }
 }

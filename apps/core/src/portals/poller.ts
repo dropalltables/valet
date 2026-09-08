@@ -1,4 +1,4 @@
-import { SANDBOX } from '@valet/shared'
+import { SANDBOX, type Service } from '@valet/shared'
 import type { StoredPortal } from '../db/schema.js'
 import type { SupervisorClient } from '../docker/supervisor-client.js'
 import { errorMessage, logger } from '../logger.js'
@@ -14,7 +14,12 @@ const UNREACHABLE_AFTER = 3
 export type PollerHooks = {
   /** Pids whose listeners (and their children's) are the agent's own, not the project's. */
   excludePids: () => number[]
-  onChange: (portals: StoredPortal[]) => void
+  onPortals: (portals: StoredPortal[]) => void
+  /**
+   * Every tick while the sandbox runs (uptime changes every time); `changed` is
+   * false when only uptime moved, so the owner can skip persisting.
+   */
+  onServices: (services: Service[], changed: boolean) => void
   /** The supervisor has not answered for a while; the owner decides whether the container is gone. */
   onUnreachable: () => void
 }
@@ -35,13 +40,16 @@ function parseNames(raw: Buffer | null): Record<string, string> {
 }
 
 /**
- * Asks the supervisor for listening ports every few seconds while a container runs
- * and reports the list whenever it differs from the last one reported. The first
- * poll always reports, so a wake replaces whatever was persisted before the pause.
+ * Asks the supervisor for listening ports and managed services every few seconds
+ * while a container runs. Portals are reported whenever the list differs from the
+ * last one reported; services are reported every tick (uptime ticks), flagged when
+ * something other than uptime changed. The first poll always reports, so a wake
+ * replaces whatever was persisted before the pause.
  */
-export class PortalPoller {
+export class SandboxPoller {
   private stopped = false
-  private lastReported: string | null = null
+  private lastPortals: string | null = null
+  private lastServices: string | null = null
   private lastPortKey = ''
   private names: Record<string, string> = {}
   private polls = 0
@@ -67,7 +75,7 @@ export class PortalPoller {
         await this.poll()
         this.failures = 0
       } catch (err) {
-        log.debug('port poll failed', { id: this.threadId, message: errorMessage(err) })
+        log.debug('sandbox poll failed', { id: this.threadId, message: errorMessage(err) })
         this.failures += 1
         if (this.failures === UNREACHABLE_AFTER) this.hooks.onUnreachable()
       }
@@ -76,17 +84,34 @@ export class PortalPoller {
   }
 
   private async poll(): Promise<void> {
-    const { ports } = await this.supervisor.ports(this.hooks.excludePids())
+    // /services alone failing (a container from an image without it answers 404) must not stop portal detection.
+    const [{ ports }, services] = await Promise.all([
+      this.supervisor.ports(this.hooks.excludePids()),
+      this.supervisor.services().catch((err: unknown) => {
+        log.debug('services poll failed', { id: this.threadId, message: errorMessage(err) })
+        return null
+      }),
+    ])
     const portKey = ports.map((p) => p.port).join(',')
     if (portKey !== this.lastPortKey || this.polls % NAMES_EVERY_POLLS === 0) {
       this.names = parseNames(await this.supervisor.fsRead(SANDBOX.portsFile).catch(() => null))
     }
     this.polls += 1
     this.lastPortKey = portKey
-    const portals: StoredPortal[] = ports.map((p) => ({ port: p.port, name: this.names[String(p.port)] ?? null, process: p.process }))
-    const key = JSON.stringify(portals)
-    if (this.stopped || key === this.lastReported) return
-    this.lastReported = key
-    this.hooks.onChange(portals)
+    if (this.stopped) return
+
+    // Service name first, then the committed ports.json, else nothing.
+    const portals: StoredPortal[] = ports.map((p) => ({ port: p.port, name: p.service ?? this.names[String(p.port)] ?? null, process: p.process }))
+    const portalsKey = JSON.stringify(portals)
+    if (portalsKey !== this.lastPortals) {
+      this.lastPortals = portalsKey
+      this.hooks.onPortals(portals)
+    }
+
+    if (services === null) return
+    const servicesKey = JSON.stringify(services.map((s) => ({ ...s, uptimeSeconds: null })))
+    const changed = servicesKey !== this.lastServices
+    this.lastServices = servicesKey
+    this.hooks.onServices(services, changed)
   }
 }

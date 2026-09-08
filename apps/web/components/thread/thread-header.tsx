@@ -30,13 +30,13 @@ type Props = {
   project: Project | undefined
   costUsd: number | null
   actions: ThreadActions
-  portalCount: number
-  onOpenPortals: () => void
+  serviceCount: number
+  onOpenServices: () => void
 }
 
 const PR_STATE: Record<'open' | 'merged' | 'closed', string> = { open: 'Open', merged: 'Merged', closed: 'Closed' }
 
-export function ThreadHeader({ thread, project, costUsd, actions, portalCount, onOpenPortals }: Props) {
+export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, onOpenServices }: Props) {
   const router = useRouter()
   const { upsertThread, removeThread } = useAppData()
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -125,9 +125,9 @@ export function ThreadHeader({ thread, project, costUsd, actions, portalCount, o
         </span>
         <span>{thread.permissions === 'ask' ? 'Ask' : 'Auto'}</span>
         {cost && <span className="tabular-nums">{cost}</span>}
-        {portalCount > 0 && (
-          <button type="button" onClick={onOpenPortals} className="tabular-nums hover:text-foreground">
-            {portalCount} {portalCount === 1 ? 'portal' : 'portals'}
+        {serviceCount > 0 && (
+          <button type="button" onClick={onOpenServices} className="tabular-nums hover:text-foreground">
+            {serviceCount} {serviceCount === 1 ? 'service' : 'services'}
           </button>
         )}
       </div>

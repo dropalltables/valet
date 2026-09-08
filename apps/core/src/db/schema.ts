@@ -1,5 +1,5 @@
 import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
-import type { AgentKind, DiffStats, ModelOption, ModelsSource, PermissionPolicy, ProjectSource, PullRequestState, Settings, ThreadStatus } from '@valet/shared'
+import type { AgentKind, DiffStats, ModelOption, ModelsSource, PermissionPolicy, ProjectSource, PullRequestState, Service, Settings, ThreadStatus } from '@valet/shared'
 
 export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
@@ -58,6 +58,8 @@ export const threads = pgTable(
     diffStats: jsonb('diff_stats').$type<DiffStats>(),
     portals: jsonb('portals').$type<StoredPortal[]>(),
     portalShares: jsonb('portal_shares').$type<Record<string, PortalShare>>(),
+    /** Managed services as last reported by the sandbox supervisor; kept while paused. */
+    services: jsonb('services').$type<Service[]>(),
     firstPrompt: text('first_prompt').notNull(),
     /** Set once the repo is cloned and the branch exists on the home volume. */
     repoReady: boolean('repo_ready').notNull().default(false),
