@@ -28,11 +28,13 @@ function initial(): StreamState {
 }
 
 /**
- * Keeps one WebSocket to `/api/threads/:id/stream` open for the lifetime of the
- * component, reconnecting with `since` set to the last applied `seq` so replay
- * never duplicates events.
+ * Keeps one WebSocket to `path` open for the lifetime of the component,
+ * reconnecting with `since` set to the last applied `seq` so replay never
+ * duplicates events. `path` is `/api/threads/:id/stream` for the owner and
+ * `/api/share/:token/stream` for an unlisted link, which carries no portal or
+ * service frames.
  */
-export function useThreadStream(threadId: string): StreamState {
+export function useThreadStream(path: string): StreamState {
   const [state, setState] = useState<StreamState>(initial)
   const seqRef = useRef(0)
 
@@ -47,7 +49,7 @@ export function useThreadStream(threadId: string): StreamState {
 
     const connect = (): void => {
       if (closed) return
-      const socket = new WebSocket(wsUrl(`/api/threads/${threadId}/stream?since=${seqRef.current}`))
+      const socket = new WebSocket(wsUrl(`${path}?since=${seqRef.current}`))
       ws = socket
       socket.onopen = () => {
         attempt = 0
@@ -105,7 +107,7 @@ export function useThreadStream(threadId: string): StreamState {
       if (timer) clearTimeout(timer)
       ws?.close()
     }
-  }, [threadId])
+  }, [path])
 
   return state
 }

@@ -49,7 +49,8 @@ export class Auth {
     return async (c, next) => {
       if (!this.enabled) return next()
       const path = c.req.path
-      if (path === '/api/health' || path.startsWith('/api/auth/')) return next()
+      // `/api/share/` carries its own credential in the path: the unlisted link token.
+      if (path === '/api/health' || path.startsWith('/api/auth/') || path.startsWith('/api/share/')) return next()
       if (!this.validCookie(getCookie(c, SESSION_COOKIE))) return c.json({ error: 'unauthorized' }, 401)
       return next()
     }

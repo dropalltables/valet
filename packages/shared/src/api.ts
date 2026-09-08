@@ -6,7 +6,8 @@
  *
  * All request/response bodies are JSON. Errors are `{ error: string }` with a 4xx/5xx
  * status. Authentication: when `VALET_PASSWORD` is set, every route except
- * `/api/health`, `/api/auth/*`, and `/api/portal-auth` requires the `valet_session` cookie.
+ * `/api/health`, `/api/auth/*`, `/api/portal-auth`, and `/api/share/*` (unlisted
+ * links, where the token is the credential) requires the `valet_session` cookie.
  *
  * Portals (see the Portals section below) are the exception to "everything under
  * `/api`": requests whose Host is `t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>` are
@@ -302,6 +303,49 @@ export type FileResponse = { path: string; content: string | null; truncated: bo
  */
 export type PushResponse = { branch: string; pushed: true }
 export type CreatePrRequest = { title?: string; body?: string; draft?: boolean }
+
+// ---------------------------------------------------------------------------
+// Sharing
+// ---------------------------------------------------------------------------
+
+/**
+ * A thread is private until an unlisted link is created for it. The link carries
+ * an AES-GCM token bound to the thread and to a generation counter; revoking bumps
+ * the generation, which kills every link issued so far. Links do not expire.
+ *
+ * GET    /api/threads/:id/share -> ThreadShareResponse
+ * POST   /api/threads/:id/share -> ThreadShareResponse with `url` set
+ * DELETE /api/threads/:id/share -> 204
+ */
+export type ThreadShareResponse = { shared: boolean; url: string | null }
+
+/** Where an unlisted link points: `<VALET_BASE_URL>/s/<token>`. */
+export const SHARE_PATH = '/s'
+
+/**
+ * The thread as a link holder sees it: the transcript and the diff, without cost,
+ * ids, or any way into the sandbox.
+ *
+ * GET /api/share/:token -> SharedThreadResponse
+ * GET /api/share/:token/changes -> ChangesResponse
+ * WS  /api/share/:token/stream?since=<seq> -> StreamFrame, minus `portals` and
+ *     `services` frames and with every cost figure removed.
+ *
+ * These are the only routes under `/api` that need no session. A token that is
+ * malformed, forged, or from a revoked generation answers 404, as does any token
+ * once too many attempts have failed in the last minute.
+ */
+export type SharedThread = {
+  title: string
+  projectName: string
+  agent: AgentKind
+  model: string
+  status: ThreadStatus
+  error: string | null
+  branch: string
+  baseBranch: string
+}
+export type SharedThreadResponse = { thread: SharedThread }
 
 // ---------------------------------------------------------------------------
 // Portals

@@ -40,12 +40,14 @@ import type {
   SendMessageResponse,
   ServicesResponse,
   SessionResponse,
+  SharedThreadResponse,
   SnapshotsResponse,
   Settings,
   SharePortalRequest,
   SharePortalResponse,
   Thread,
   ThreadListItem,
+  ThreadShareResponse,
   ThreadsResponse,
   UpdateProjectRequest,
   UpdateSettingsRequest,
@@ -197,11 +199,21 @@ export const api = {
       logs: (id: string, name: string, lines: number) =>
         request<string>(`/api/threads/${id}/services/${encodeURIComponent(name)}/logs${q({ lines })}`),
     },
+    share: {
+      get: (id: string) => request<ThreadShareResponse>(`/api/threads/${id}/share`),
+      create: (id: string) => request<ThreadShareResponse>(`/api/threads/${id}/share`, { method: 'POST' }),
+      revoke: (id: string) => request<void>(`/api/threads/${id}/share`, { method: 'DELETE' }),
+    },
     push: (id: string) => request<PushResponse>(`/api/threads/${id}/push`, { method: 'POST' }),
     createPr: (id: string, body: CreatePrRequest) =>
       request<Thread>(`/api/threads/${id}/pr`, { method: 'POST', body: json(body) }),
   },
   usage: (range: UsageRange) => request<UsageResponse>(`/api/usage${q({ range })}`),
+  /** Unlisted links: read-only, no session, the token in the path is the credential. */
+  share: {
+    thread: (token: string) => request<SharedThreadResponse>(`/api/share/${token}`),
+    changes: (token: string) => request<ChangesResponse>(`/api/share/${token}/changes`),
+  },
 }
 
 export function wsUrl(path: string): string {

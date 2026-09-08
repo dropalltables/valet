@@ -9,7 +9,7 @@ import { ReasoningItemView } from '@/components/thread/items/reasoning-item'
 import { TextItemView } from '@/components/thread/items/text-item'
 import { ToolGroup } from '@/components/thread/items/tool-group'
 
-export const TurnView = memo(function TurnView({ threadId, turn }: { threadId: string; turn: Turn }) {
+export const TurnView = memo(function TurnView({ threadId, turn }: { threadId: string | null; turn: Turn }) {
   const blocks = useMemo(() => groupItems(turn.items), [turn.items])
   return (
     <article className="flex flex-col gap-3">
@@ -42,7 +42,7 @@ function UserPrompt({ prompt }: { prompt: Turn['prompt'] }) {
   )
 }
 
-function ItemView({ threadId, item }: { threadId: string; item: TurnItem }): ReactNode {
+function ItemView({ threadId, item }: { threadId: string | null; item: TurnItem }): ReactNode {
   switch (item.kind) {
     case 'text':
       return <TextItemView item={item} />

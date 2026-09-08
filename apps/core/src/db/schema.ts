@@ -115,6 +115,10 @@ export const threads = pgTable(
     diffStats: jsonb('diff_stats').$type<DiffStats>(),
     portals: jsonb('portals').$type<StoredPortal[]>(),
     portalShares: jsonb('portal_shares').$type<Record<string, PortalShare>>(),
+    /** An unlisted link exists for this thread; tokens carry `share_generation`. */
+    shared: boolean('shared').notNull().default(false),
+    /** Bumped on revoke, which invalidates every link issued so far. */
+    shareGeneration: integer('share_generation').notNull().default(0),
     /** Managed services as last reported by the sandbox supervisor; kept while paused. */
     services: jsonb('services').$type<Service[]>(),
     firstPrompt: text('first_prompt').notNull(),

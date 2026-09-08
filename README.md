@@ -142,6 +142,10 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   or the repository declares them in `.valet/services.yaml` (below). Services with a port get
   `PORT` and `PUBLIC_URL`, restart when the sandbox wakes, and appear in the Services
   tab with logs and Start, Stop, Restart, and Remove controls.
+- **Sharing.** Threads are private. *Share* in the thread header creates an unlisted
+  link at `/s/<token>`: a read-only page with the live transcript and the diff, no
+  composer, no terminal or desktop, no cost, and no login. *Revoke* invalidates every
+  link issued for the thread so far.
 - **Portals.** Every TCP port listening inside a running sandbox is reachable at
   `http://t-<thread>-p<port>.localhost:3000` (or `https://t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`
   on a server). The web app matches the hostname and forwards the whole request,

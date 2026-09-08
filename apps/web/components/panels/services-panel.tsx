@@ -17,6 +17,7 @@ import {
 } from '@valet/shared'
 import { toast } from 'sonner'
 import { api, errorMessage, wsUrl } from '@/lib/api'
+import { copy } from '@/lib/clipboard'
 import { stripAnsi } from '@/lib/format'
 import { useNow } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
@@ -48,15 +49,6 @@ const LOG_TAIL_LINES = 200
 const LOG_TAIL_STEP = 500
 /** Bytes of decoded log text kept in memory per open tail. */
 const LOG_BUFFER_LIMIT = 512 * 1024
-
-async function copy(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-    toast.success('Copied')
-  } catch (err) {
-    toast.error(errorMessage(err))
-  }
-}
 
 function stateLabel(s: Service): string {
   const code = s.lastExitCode

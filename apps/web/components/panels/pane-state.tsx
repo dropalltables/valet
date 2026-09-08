@@ -13,14 +13,15 @@ export function PaneState({
 }: {
   status: ThreadStatus
   detail?: string | null
-  onWake: () => void
+  /** Null when the viewer cannot wake the sandbox (an unlisted link). */
+  onWake: (() => void) | null
   waking: boolean
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm">
       <StatusWord status={status} className="text-sm" />
       {detail && <p className="max-w-sm text-center text-xs text-muted-foreground">{detail}</p>}
-      {status === 'paused' && (
+      {status === 'paused' && onWake && (
         <Button size="sm" variant="outline" onClick={onWake} disabled={waking}>
           Wake
         </Button>

@@ -23,6 +23,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from '@/components/ui/input'
 import { StatusWord } from '@/components/app/status'
 import { useAppData } from '@/components/app/data-provider'
+import { SharePopover } from '@/components/thread/share-popover'
 import type { ThreadActions } from '@/components/thread/thread-actions'
 
 type Props = {
@@ -79,6 +80,7 @@ export function ThreadHeader({ thread, project, costUsd, actions, serviceCount, 
             </a>
           </Button>
         )}
+        <SharePopover threadId={thread.id} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="icon-sm" variant="ghost" aria-label="More">

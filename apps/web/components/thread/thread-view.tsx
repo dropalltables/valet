@@ -17,7 +17,7 @@ import { TranscriptView } from '@/components/thread/transcript'
 
 export function ThreadView({ id }: { id: string }) {
   const { threads, projects, upsertThread, patchThread } = useAppData()
-  const stream = useThreadStream(id)
+  const stream = useThreadStream(`/api/threads/${id}/stream`)
   const [missing, setMissing] = useState<string | null>(null)
   const thread = threads.find((t) => t.id === id)
 

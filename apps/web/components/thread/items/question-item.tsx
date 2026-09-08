@@ -8,15 +8,17 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 
-export function QuestionItemView({ threadId, item }: { threadId: string; item: QuestionItem }) {
+export function QuestionItemView({ threadId, item }: { threadId: string | null; item: QuestionItem }) {
   const [answers, setAnswers] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
   const answered = item.answers
+  const locked = threadId === null || answered !== null
 
   const complete = item.questions.every((q) => (answers[q.id]?.length ?? 0) > 0 && answers[q.id]?.some((a) => a.trim()))
 
   async function submit(e: FormEvent): Promise<void> {
     e.preventDefault()
+    if (threadId === null) return
     setBusy(true)
     try {
       await api.threads.answer(threadId, item.id, { answers })
@@ -33,11 +35,11 @@ export function QuestionItemView({ threadId, item }: { threadId: string; item: Q
           key={q.id}
           question={q}
           value={answered ? (answered[q.id] ?? []) : (answers[q.id] ?? [])}
-          readOnly={answered !== null}
+          readOnly={locked}
           onChange={(v) => setAnswers((a) => ({ ...a, [q.id]: v }))}
         />
       ))}
-      {!answered && (
+      {!locked && (
         <div>
           <Button type="submit" size="sm" disabled={!complete || busy}>
             Answer
