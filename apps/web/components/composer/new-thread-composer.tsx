@@ -28,6 +28,7 @@ import { InputGroupTextarea } from '@/components/ui/input-group'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAppData } from '@/components/app/data-provider'
 import { AttachmentStrip } from '@/components/composer/attachments'
+import { DropOverlay } from '@/components/composer/drop-overlay'
 import { NewProjectForm } from '@/components/composer/new-project-form'
 import { ProjectPicker } from '@/components/composer/project-picker'
 
@@ -125,7 +126,8 @@ function Composer() {
 
   return (
     <div className="flex flex-col gap-3">
-      <PromptInput onSubmit={submit} accept="image/*" multiple className="flex flex-col">
+      <PromptInput onSubmit={submit} accept="image/*" multiple globalDrop className="flex flex-col">
+        <DropOverlay />
         <AttachmentStrip />
         <ComposerTextarea disabled={busy} canSubmit={canSubmit} />
         <PromptInputFooter className="flex-nowrap items-center gap-2">

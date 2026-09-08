@@ -20,6 +20,7 @@ import {
 } from '@/components/ai-elements/prompt-input'
 import { Button } from '@/components/ui/button'
 import { AttachmentStrip } from '@/components/composer/attachments'
+import { DropOverlay } from '@/components/composer/drop-overlay'
 
 type Mode = 'queue' | 'steer'
 
@@ -70,7 +71,8 @@ function Composer({ threadId, status }: { threadId: string; status: ThreadStatus
 
   return (
     <div className="border-t px-4 py-3">
-      <PromptInput onSubmit={send} accept="image/*" multiple className="mx-auto max-w-3xl">
+      <PromptInput onSubmit={send} accept="image/*" multiple globalDrop className="mx-auto max-w-3xl">
+        <DropOverlay />
         <AttachmentStrip />
         <PromptInputTextarea
           disabled={!accepts || busy}
