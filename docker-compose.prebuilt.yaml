@@ -1,0 +1,17 @@
+# Deploy published images instead of building from source:
+#
+#   VALET_IMAGE_PREFIX=ghcr.io/your-org/ \
+#   docker compose -f docker-compose.yaml -f docker-compose.prebuilt.yaml up -d
+#
+# The base file already names the images ${VALET_IMAGE_PREFIX}valet-*:latest; this file
+# only drops the build contexts, so the repository is not needed on the host.
+
+services:
+  core:
+    build: !reset null
+
+  web:
+    build: !reset null
+
+  sandbox:
+    build: !reset null

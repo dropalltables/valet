@@ -147,7 +147,7 @@ export function createApp(deps: AppDeps): Hono {
       version: deps.version,
       db,
       docker,
-      sandboxImage: image ?? { image: deps.docker.imageName, present: false, imageId: null, createdAt: null },
+      sandboxImage: image ?? { image: deps.docker.imageName, present: false, imageId: null, createdAt: null, pulling: null, pullError: null },
       authEnabled: deps.auth.enabled,
     }
     return c.json(body)

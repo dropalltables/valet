@@ -27,6 +27,15 @@ export function HealthGate({ children }: { children: ReactNode }) {
     void refresh()
   }, [refresh])
 
+  // Core pulls the sandbox image by itself: follow a running pull closely, a missing one loosely.
+  const image = health?.sandboxImage ?? null
+  const delay = image === null || image.present ? null : image.pulling !== null ? 2_000 : 30_000
+  useEffect(() => {
+    if (delay === null) return
+    const timer = setInterval(() => void refresh(), delay)
+    return () => clearInterval(timer)
+  }, [delay, refresh])
+
   const problems: Array<[string, string]> = []
   if (error) problems.push(['Core', error])
   if (health && !health.db.ok) problems.push(['Database', health.db.error ?? 'Not reachable'])

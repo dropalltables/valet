@@ -307,13 +307,14 @@ function Sandbox() {
   const { health } = useHealth()
   if (!health) return null
   const img = health.sandboxImage
+  const state = img.pulling !== null ? `Pulling ${img.pulling}%` : img.present ? 'Present' : 'Absent'
   return (
     <Section title="Sandbox">
       <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
         <dt className="text-muted-foreground">Image</dt>
         <dd className="font-mono text-xs">{img.image}</dd>
         <dt className="text-muted-foreground">State</dt>
-        <dd>{img.present ? 'Present' : 'Absent'}</dd>
+        <dd className="tabular-nums">{state}</dd>
         {img.imageId && (
           <>
             <dt className="text-muted-foreground">Image id</dt>
@@ -326,8 +327,16 @@ function Sandbox() {
             <dd>{relativeTime(img.createdAt)}</dd>
           </>
         )}
+        {img.pullError && (
+          <>
+            <dt className="text-muted-foreground">Pull</dt>
+            <dd className="font-mono text-xs text-destructive">{img.pullError}</dd>
+          </>
+        )}
       </dl>
-      {!img.present && <p className="font-mono text-xs text-muted-foreground">docker compose --profile sandbox build</p>}
+      {!img.present && img.pulling === null && (
+        <p className="font-mono text-xs text-muted-foreground">docker compose --profile sandbox build</p>
+      )}
     </Section>
   )
 }

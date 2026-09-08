@@ -33,7 +33,7 @@ async function main(): Promise<void> {
 
   const docker = new DockerClient(cfg)
   await docker.ping().then(
-    () => log.info('docker ready'),
+    async () => log.info('docker ready', await docker.environment()),
     (err: unknown) => log.warn('docker is not reachable; sandboxes will fail until it is', { message: errorMessage(err) }),
   )
 
@@ -65,6 +65,7 @@ async function main(): Promise<void> {
   await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))
   threads.startSweeper()
+  docker.startImageWatcher()
   await catalog.refreshStale(STALE_AFTER_MS).catch((err: unknown) => log.error('model catalog check failed', { err }))
 
   let shuttingDown = false
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
     const timer = setTimeout(() => process.exit(1), 10_000)
     timer.unref()
     server.close()
+    docker.shutdown()
     void threads
       .shutdown()
       .then(() => pool.end())

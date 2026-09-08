@@ -309,6 +309,10 @@ export type SandboxImageStatus = {
   /** Docker image id when present. */
   imageId: string | null
   createdAt: string | null
+  /** Percent of the pull core is running now, else null. */
+  pulling: number | null
+  /** Why the last pull failed. */
+  pullError: string | null
 }
 
 export type Health = {

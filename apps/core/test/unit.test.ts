@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import { test } from 'node:test'
+import type Docker from 'dockerode'
 import { normalizeClaudeTool } from '../src/agents/tool-names.js'
 import { parseCookie } from '../src/auth.js'
 import { parseSize } from '../src/config.js'
 import { parseDeviceLoginOutput } from '../src/credentials/device-login.js'
 import { maskToken } from '../src/credentials/store.js'
 import { Cipher, timingSafeEqualStrings } from '../src/crypto.js'
+import { isLocallyBuilt, reposVolumeName, soleNetworkName } from '../src/docker/client.js'
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
 import { parseGitHubUrl } from '../src/git/github.js'
 import { titleFromPrompt } from '../src/threads/mapper.js'
@@ -28,6 +30,28 @@ test('config sizes', () => {
   assert.equal(parseSize('512m'), 512 * 1024 ** 2)
   assert.equal(parseSize('1024'), 1024)
   assert.throws(() => parseSize('lots'))
+})
+
+type Mount = Docker.ContainerInspectInfo['Mounts'][number]
+
+test('docker environment discovery', () => {
+  const none = new Set<string>()
+  assert.equal(soleNetworkName({ 'ab12cd_valet': {} }, none), 'ab12cd_valet')
+  assert.equal(soleNetworkName({ bridge: {}, 'valet_valet': {} }, none), 'valet_valet')
+  assert.throws(() => soleNetworkName({ bridge: {} }, none), /0 Docker networks/)
+  assert.throws(() => soleNetworkName({ a: {}, b: {} }, none), /2 Docker networks/)
+  // Coolify's shared proxy network alongside the stack's own.
+  assert.equal(soleNetworkName({ coolify: {}, 'ab12cd_valet': {} }, new Set(['ab12cd_valet'])), 'ab12cd_valet')
+  assert.throws(() => soleNetworkName({ a: {}, b: {} }, new Set(['a', 'b'])), /2 Docker networks/)
+
+  const mount = (over: Partial<Mount>): Mount => ({ Type: 'volume', Source: '', Destination: '/valet/repos', Mode: '', RW: true, Propagation: '', ...over })
+  assert.equal(reposVolumeName([mount({ Name: 'ab12cd_repos' })], '/valet/repos'), 'ab12cd_repos')
+  assert.equal(reposVolumeName([mount({ Type: 'bind', Source: '/srv/repos' })], '/valet/repos'), '/srv/repos')
+  assert.throws(() => reposVolumeName([mount({ Destination: '/other' })], '/valet/repos'), /no mount at/)
+
+  assert.equal(isLocallyBuilt('valet-sandbox:latest'), true)
+  assert.equal(isLocallyBuilt('ghcr.io/your-org/valet-sandbox:latest'), false)
+  assert.equal(isLocallyBuilt('your-org/valet-sandbox:latest'), false)
 })
 
 test('claude tool names', () => {
