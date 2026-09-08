@@ -106,8 +106,25 @@ export type Project = {
   defaultBranch: string
   /** Whether the repo has a `.valet/setup` script (detected on first clone). */
   hasSetupScript: boolean | null
+  /** Warm-start volume built after `.valet/setup`, or null while none is current. */
+  snapshot: ProjectSnapshot | null
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * A clone of a thread's home volume taken once `.valet/setup` succeeded. New threads
+ * whose `key` matches start from it and skip setup.
+ */
+export type ProjectSnapshot = {
+  /** sha256 over `.valet/setup`, the blob ids of the lockfiles present, and the base branch name. */
+  key: string
+  /** Threads on any other base branch build their own snapshot instead of using this one. */
+  baseBranch: string
+  volume: string
+  sizeBytes: number
+  createdAt: string
+  lastUsedAt: string
 }
 
 /** Per-project environment variables. Values are encrypted at rest; the API returns them masked. */

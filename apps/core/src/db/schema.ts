@@ -8,6 +8,14 @@ export const projects = pgTable('projects', {
   repoUrl: text('repo_url'),
   defaultBranch: text('default_branch').notNull(),
   hasSetupScript: boolean('has_setup_script'),
+  /** Warm-start snapshot of a home volume taken after `.valet/setup`; all null while none exists. */
+  snapshotKey: text('snapshot_key'),
+  /** Part of the key, but kept apart so a thread on another base branch is rejected before the volume is copied. */
+  snapshotBaseBranch: text('snapshot_base_branch'),
+  snapshotVolume: text('snapshot_volume'),
+  snapshotSizeBytes: bigint('snapshot_size_bytes', { mode: 'number' }),
+  snapshotCreatedAt: timestamp('snapshot_created_at', { withTimezone: true }),
+  snapshotLastUsedAt: timestamp('snapshot_last_used_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })

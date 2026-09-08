@@ -29,29 +29,34 @@ import type { Config } from '../config.js'
 import type { CredentialStore } from '../credentials/store.js'
 import { randomHex, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
-import { projects, threads, type PortalShare, type StoredPortal, type ThreadRow } from '../db/schema.js'
+import { projects, threads, type PortalShare, type ProjectRow, type StoredPortal, type ThreadRow } from '../db/schema.js'
 import { LABEL_THREAD, sandboxName, volumeName, type DockerClient } from '../docker/client.js'
 import { waitForSupervisor, type ExecSocket, type SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError, badRequest, conflict, notFound } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { withAskpass } from '../git/askpass.js'
-import { computeChanges, git } from '../git/changes.js'
+import { computeChanges, git, type GitRunner } from '../git/changes.js'
 import { GitHub, cloneUrl, requireRepoRef } from '../git/github.js'
 import { newId, shortHex } from '../ids.js'
 import { errorMessage, logger } from '../logger.js'
 import { SandboxPoller } from '../portals/poller.js'
 import type { PortalUrls } from '../portals/urls.js'
 import type { ProjectService } from '../projects/service.js'
+import type { SnapshotStore } from '../projects/snapshots.js'
 import type { SettingsService } from '../settings.js'
 import { titleFromPrompt, toListItem, toPortals, toThread } from './mapper.js'
 import {
   cloneRepo,
+  fetchBaseKey,
   prepareBranch,
+  readSnapshotKey,
   repoExists,
   repoGit,
+  resetToFetchHead,
   runResume,
   runServicesEnsure,
   runSetup,
+  shortSnapshotKey,
   syncCodexAuth,
   writeCodexHome,
   writeEnvFile,
@@ -101,6 +106,7 @@ export type ThreadServiceDeps = {
   docker: DockerClient
   events: EventLog
   projects: ProjectService
+  snapshots: SnapshotStore
   credentials: CredentialStore
   settings: SettingsService
   portalUrls: PortalUrls
@@ -119,6 +125,7 @@ export class ThreadService {
   private readonly docker: DockerClient
   private readonly events: EventLog
   private readonly projects: ProjectService
+  private readonly snapshots: SnapshotStore
   private readonly credentials: CredentialStore
   private readonly settings: SettingsService
   private readonly portalUrls: PortalUrls
@@ -130,6 +137,7 @@ export class ThreadService {
     this.docker = deps.docker
     this.events = deps.events
     this.projects = deps.projects
+    this.snapshots = deps.snapshots
     this.credentials = deps.credentials
     this.settings = deps.settings
     this.portalUrls = deps.portalUrls
@@ -488,23 +496,39 @@ export class ThreadService {
       await this.setStatus(id, 'provisioning')
       const row = await this.row(id)
       const project = await this.projects.getRow(row.projectId)
+      // Before the container exists: the snapshot becomes the thread's home volume, or is
+      // already there from an attempt that failed after restoring it.
+      const restored = await this.snapshots.restore(project, row, signal)
       const { sandbox } = await this.ensureSandbox(live, row, signal)
       const exec = await this.ensureExec(live)
       const projectEnv = this.sandboxEnv(id, await this.projects.decryptedEnv(project.id))
       const sink = this.sink(id)
 
-      if (!(await repoExists(sandbox.supervisor))) {
+      const source: CloneSource =
+        project.source === 'github'
+          ? { kind: 'github', url: cloneUrl(requireRepoRef(project.repoUrl)), token: await this.credentials.githubToken() }
+          : { kind: 'blank', path: `${SANDBOX.reposMount}/${project.id}.git` }
+      const run = repoGit(sandbox.supervisor, {}, signal)
+      const snapshotKey =
+        restored === null ? null : await this.useSnapshot({ row, project, restored, source, supervisor: sandbox.supervisor, run, sink, signal })
+      if (snapshotKey === null && (restored !== null || !(await repoExists(sandbox.supervisor)))) {
         sink('info', 'Cloning repository')
-        const source: CloneSource =
-          project.source === 'github'
-            ? { kind: 'github', url: cloneUrl(requireRepoRef(project.repoUrl)), token: await this.credentials.githubToken() }
-            : { kind: 'blank', path: `${SANDBOX.reposMount}/${project.id}.git` }
         await cloneRepo(sandbox.supervisor, source, row.baseBranch, signal)
       }
-      await prepareBranch(repoGit(sandbox.supervisor, {}, signal), row.branch)
+      await prepareBranch(run, row.branch)
       await writeEnvFile(sandbox.supervisor, projectEnv)
-      const hasSetup = await runSetup(sandbox.supervisor, exec, projectEnv, sink, signal)
-      if (project.hasSetupScript !== hasSetup) await this.projects.setHasSetupScript(project.id, hasSetup)
+      signal.throwIfAborted()
+      if (snapshotKey === null) {
+        const setup = await runSetup(sandbox.supervisor, exec, projectEnv, sink, signal)
+        if (project.hasSetupScript !== setup.ran) await this.projects.setHasSetupScript(project.id, setup.ran)
+        signal.throwIfAborted()
+        // Before services start and before the first turn: nothing is writing to the volume yet.
+        if (setup.ran && setup.ok) {
+          await this.snapshots.capture(project, await readSnapshotKey(run, 'HEAD', row.baseBranch), row.baseBranch, row.volumeName, signal)
+        }
+      } else {
+        await runResume(sandbox.supervisor, exec, projectEnv, sink)
+      }
       signal.throwIfAborted()
       await runServicesEnsure(sandbox.supervisor, exec, sink, signal)
       signal.throwIfAborted()
@@ -517,6 +541,41 @@ export class ThreadService {
       else await this.fail(id, err)
     } finally {
       if (live.provisionAbort === abort) live.provisionAbort = null
+    }
+  }
+
+  /**
+   * Brings a restored snapshot up to the base branch head, or returns null when it no
+   * longer fits the repository, which also invalidates it for the project. The caller
+   * clones fresh in that case.
+   */
+  private async useSnapshot(ctx: {
+    row: ThreadRow
+    project: ProjectRow
+    restored: string
+    source: CloneSource
+    supervisor: SupervisorClient
+    run: GitRunner
+    sink: LogSink
+    signal: AbortSignal
+  }): Promise<string | null> {
+    const { row, project, restored, source, supervisor, run, sink, signal } = ctx
+    try {
+      const key = await fetchBaseKey(supervisor, source, row.baseBranch, signal)
+      if (key !== restored) {
+        sink('info', 'Snapshot is out of date')
+        // Only if the project still points at what this thread restored: another thread
+        // may have captured a current snapshot while this one was retrying.
+        if (project.snapshotKey === restored) await this.snapshots.drop(project.id, 'setup or lockfiles changed at base head')
+        return null
+      }
+      await resetToFetchHead(run, row.baseBranch)
+      sink('info', `Started from snapshot ${shortSnapshotKey(key)}`)
+      return key
+    } catch (err) {
+      signal.throwIfAborted()
+      log.warn('starting from snapshot failed', { id: row.id, err: errorMessage(err) })
+      return null
     }
   }
 

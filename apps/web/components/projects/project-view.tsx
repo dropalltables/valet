@@ -3,11 +3,11 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState, type FormEvent } from 'react'
-import useSWR from 'swr'
+import useSWR, { useSWRConfig } from 'swr'
 import type { Project, ProjectEnvVar } from '@valet/shared'
 import { toast } from 'sonner'
 import { api, ApiError, errorMessage } from '@/lib/api'
-import { relativeTime, repoSlug } from '@/lib/format'
+import { bytes, relativeTime, repoSlug } from '@/lib/format'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,6 +53,7 @@ export function ProjectView({ id }: { id: string }) {
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-6 py-8">
         <Details project={project} />
+        <Snapshot project={project} />
         <EnvVars projectId={project.id} />
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-medium">Threads</h2>
@@ -147,6 +148,50 @@ function Details({ project }: { project: Project }) {
         </Button>
       </div>
     </form>
+  )
+}
+
+function Snapshot({ project }: { project: Project }) {
+  const { upsertProject } = useAppData()
+  const { mutate } = useSWRConfig()
+  const [busy, setBusy] = useState(false)
+  const snapshot = project.snapshot
+  if (!snapshot) return null
+
+  async function remove(): Promise<void> {
+    setBusy(true)
+    try {
+      await api.projects.removeSnapshot(project.id)
+      upsertProject(await api.projects.get(project.id))
+      await mutate('snapshots')
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium">Snapshot</h2>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => void remove()}>
+          Delete snapshot
+        </Button>
+      </div>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">Key</dt>
+        <dd className="font-mono text-xs">{snapshot.key.slice(0, 12)}</dd>
+        <dt className="text-muted-foreground">Base branch</dt>
+        <dd className="font-mono text-xs">{snapshot.baseBranch}</dd>
+        <dt className="text-muted-foreground">Size</dt>
+        <dd className="tabular-nums">{bytes(snapshot.sizeBytes)}</dd>
+        <dt className="text-muted-foreground">Created</dt>
+        <dd>{relativeTime(snapshot.createdAt)}</dd>
+        <dt className="text-muted-foreground">Last used</dt>
+        <dd>{relativeTime(snapshot.lastUsedAt)}</dd>
+      </dl>
+    </section>
   )
 }
 

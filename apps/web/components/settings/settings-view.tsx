@@ -13,8 +13,8 @@ import {
 } from '@valet/shared'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import { relativeTime } from '@/lib/format'
-import { useAgents, useCredentials, useSettings } from '@/lib/hooks'
+import { bytes, relativeTime } from '@/lib/format'
+import { useAgents, useCredentials, useSettings, useSnapshots } from '@/lib/hooks'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -29,6 +29,7 @@ export function SettingsView() {
         <h1 className="text-lg font-medium">Settings</h1>
         <Credentials />
         <Sandbox />
+        <Snapshots />
         <Defaults />
         <System />
       </div>
@@ -328,6 +329,23 @@ function Sandbox() {
         )}
       </dl>
       {!img.present && <p className="font-mono text-xs text-muted-foreground">docker compose --profile sandbox build</p>}
+    </Section>
+  )
+}
+
+function Snapshots() {
+  const { data } = useSnapshots()
+  if (!data) return null
+  return (
+    <Section title="Snapshots">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+        <dt className="text-muted-foreground">State</dt>
+        <dd>{data.enabled ? 'On' : 'Off'}</dd>
+        <dt className="text-muted-foreground">Projects</dt>
+        <dd className="tabular-nums">{data.count}</dd>
+        <dt className="text-muted-foreground">Storage</dt>
+        <dd className="tabular-nums">{`${bytes(data.totalBytes)} of ${bytes(data.budgetBytes)}`}</dd>
+      </dl>
     </Section>
   )
 }

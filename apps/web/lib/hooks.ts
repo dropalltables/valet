@@ -22,6 +22,10 @@ export function useSettings() {
   return useSWR('settings', () => api.settings.get(), { revalidateOnFocus: false })
 }
 
+export function useSnapshots() {
+  return useSWR('snapshots', () => api.snapshots())
+}
+
 export function useCredentials() {
   return useSWR('credentials', () => api.credentials.list())
 }

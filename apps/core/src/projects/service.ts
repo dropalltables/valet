@@ -14,6 +14,8 @@ import type { EventLog } from '../events/log.js'
 import { canonicalRepoUrl, parseGitHubUrl } from '../git/github.js'
 import { newId } from '../ids.js'
 import { logger } from '../logger.js'
+import { toProject } from './mapper.js'
+import type { SnapshotStore } from './snapshots.js'
 
 const log = logger('projects')
 const exec = promisify(execFile)
@@ -27,19 +29,6 @@ export type CreateProjectInput =
 export type UpdateProjectInput = { name?: string | undefined; defaultBranch?: string | undefined }
 export type PutProjectEnvInput = { vars: Array<{ name: string; value?: string | undefined; kind: 'plain' | 'secret' }> }
 
-export function toProject(row: ProjectRow): Project {
-  return {
-    id: row.id,
-    name: row.name,
-    source: row.source,
-    repoUrl: row.repoUrl,
-    defaultBranch: row.defaultBranch,
-    hasSetupScript: row.hasSetupScript,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  }
-}
-
 function maskValue(value: string): string {
   if (value.length <= 4) return '****'
   return `${value.slice(0, 2)}…${value.slice(-2)}`
@@ -51,6 +40,7 @@ export class ProjectService {
     private readonly cipher: Cipher,
     private readonly cfg: Config,
     private readonly events: EventLog,
+    private readonly snapshots: SnapshotStore,
     private readonly lookupDefaultBranch: (repoUrl: string) => Promise<string | null>,
   ) {}
 
@@ -156,6 +146,7 @@ export class ProjectService {
   async remove(id: string): Promise<void> {
     const row = await this.getRow(id)
     if ((await this.threadCount(id)) > 0) throw conflict('project still has threads')
+    await this.snapshots.drop(id, 'project deleted').catch((err: unknown) => log.warn('failed to remove snapshot', { id, err }))
     await this.db.delete(projects).where(eq(projects.id, id))
     if (row.source === 'blank') {
       await fs.rm(this.bareRepoPath(id), { recursive: true, force: true }).catch((err) => log.warn('failed to remove bare repo', { id, err }))

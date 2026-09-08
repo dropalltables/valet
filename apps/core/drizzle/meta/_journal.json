@@ -36,6 +36,13 @@
       "when": 1788840060601,
       "tag": "0004_services",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788850065189,
+      "tag": "0005_snapshots",
+      "breakpoints": true
     }
   ]
 }

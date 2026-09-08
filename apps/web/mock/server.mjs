@@ -26,6 +26,14 @@ const projects = new Map(
       repoUrl: 'https://github.com/acme/valet',
       defaultBranch: 'main',
       hasSetupScript: true,
+      snapshot: {
+        key: '9f2c41a0b7de5c83a1e4f6d20b9c7714a3e58d16c0fb92a4d7e315c8b60af293',
+        baseBranch: 'main',
+        volume: 'valet-snap-p-valet-9f2c41a0b7de',
+        sizeBytes: 3_812_000_000,
+        createdAt: ago(60 * 24 * 2),
+        lastUsedAt: ago(60 * 3),
+      },
       createdAt: ago(60 * 24 * 12),
       updatedAt: ago(60 * 5),
     },
@@ -36,6 +44,7 @@ const projects = new Map(
       repoUrl: 'https://github.com/acme/docs-site',
       defaultBranch: 'develop',
       hasSetupScript: false,
+      snapshot: null,
       createdAt: ago(60 * 24 * 40),
       updatedAt: ago(60 * 24 * 2),
     },
@@ -46,6 +55,7 @@ const projects = new Map(
       repoUrl: null,
       defaultBranch: 'main',
       hasSetupScript: null,
+      snapshot: null,
       createdAt: ago(60 * 24 * 3),
       updatedAt: ago(60 * 24 * 3),
     },
@@ -755,14 +765,24 @@ async function handle(req, res) {
     }
   }
 
+  if (path === '/api/snapshots') {
+    const withSnapshot = [...projects.values()].filter((p) => p.snapshot)
+    return send(res, 200, {
+      enabled: true,
+      count: withSnapshot.length,
+      totalBytes: withSnapshot.reduce((sum, p) => sum + p.snapshot.sizeBytes, 0),
+      budgetBytes: 20 * 1024 ** 3,
+    })
+  }
+
   if (path === '/api/projects') {
     if (method === 'POST') {
       const body = await readJson(req)
       const id = `p-${randomUUID().slice(0, 6)}`
       const project =
         body.source === 'github'
-          ? { id, name: body.name ?? body.repoUrl.split('/').pop(), source: 'github', repoUrl: body.repoUrl, defaultBranch: body.defaultBranch ?? 'main', hasSetupScript: null, createdAt: now(), updatedAt: now() }
-          : { id, name: body.name, source: 'blank', repoUrl: null, defaultBranch: 'main', hasSetupScript: null, createdAt: now(), updatedAt: now() }
+          ? { id, name: body.name ?? body.repoUrl.split('/').pop(), source: 'github', repoUrl: body.repoUrl, defaultBranch: body.defaultBranch ?? 'main', hasSetupScript: null, snapshot: null, createdAt: now(), updatedAt: now() }
+          : { id, name: body.name, source: 'blank', repoUrl: null, defaultBranch: 'main', hasSetupScript: null, snapshot: null, createdAt: now(), updatedAt: now() }
       projects.set(id, project)
       envVars.set(id, [])
       broadcast(globalSubscribers, { t: 'project', project })
@@ -781,6 +801,12 @@ async function handle(req, res) {
         envVars.set(project.id, next)
       }
       return send(res, 200, { vars: (envVars.get(project.id) ?? []).map((v) => ({ name: v.name, kind: v.kind, maskedValue: mask(v.value) })) })
+    }
+    if (seg[3] === 'snapshot' && method === 'DELETE') {
+      project.snapshot = null
+      project.updatedAt = now()
+      broadcast(globalSubscribers, { t: 'project', project })
+      return send(res, 204)
     }
     if (method === 'PATCH') {
       Object.assign(project, await readJson(req), { updatedAt: now() })

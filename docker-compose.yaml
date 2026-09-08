@@ -52,6 +52,8 @@ services:
       VALET_SANDBOX_MEMORY: ${VALET_SANDBOX_MEMORY:-4g}
       VALET_SANDBOX_CPUS: ${VALET_SANDBOX_CPUS:-2}
       VALET_MAX_RUNNING_SANDBOXES: ${VALET_MAX_RUNNING_SANDBOXES:-8}
+      VALET_SNAPSHOTS: ${VALET_SNAPSHOTS:-1}
+      VALET_SNAPSHOT_MAX_GB: ${VALET_SNAPSHOT_MAX_GB:-20}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - repos:/valet/repos

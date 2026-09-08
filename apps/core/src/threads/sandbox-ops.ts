@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { SANDBOX, type RunReply } from '@valet/shared'
 import type { ExecSocket, SupervisorClient } from '../docker/supervisor-client.js'
 import type { CodexAuthJson, CredentialStore } from '../credentials/store.js'
@@ -51,6 +52,102 @@ export async function cloneRepo(supervisor: SupervisorClient, source: CloneSourc
   }
   if (source.kind === 'github') await withAskpass(supervisor, source.token, clone)
   else await clone({})
+}
+
+/**
+ * Files whose contents decide whether a snapshot still fits a repository. Anything a
+ * `.valet/setup` run would install from; `requirements*.txt` is matched separately.
+ */
+const SNAPSHOT_LOCKFILES: readonly string[] = [
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+  'uv.lock',
+  'poetry.lock',
+  'Pipfile.lock',
+  'Gemfile.lock',
+  'Cargo.lock',
+  'go.sum',
+  'composer.lock',
+  'mix.lock',
+]
+
+const REQUIREMENTS_RE = /^requirements[\w.-]*\.txt$/
+
+/** The lockfiles to hash, given the names in the repository root, sorted for determinism. */
+export function snapshotKeyPaths(rootEntries: readonly string[]): string[] {
+  const wanted = new Set(SNAPSHOT_LOCKFILES)
+  return rootEntries.filter((name) => wanted.has(name) || REQUIREMENTS_RE.test(name)).sort()
+}
+
+/** A hashed path: `null` means it is absent at the ref, which hashes differently from empty. */
+export type SnapshotEntry = { path: string; oid: string | null }
+
+/**
+ * Blob ids rather than file contents: exact for binary lockfiles such as `bun.lockb`, and
+ * unaffected by the cap the supervisor puts on a command's output. The paths are hashed
+ * alongside them, so adding or removing a lockfile changes the key on its own.
+ */
+export function snapshotKey(baseBranch: string, entries: readonly SnapshotEntry[]): string {
+  const hash = createHash('sha256')
+  hash.update(`base\0${baseBranch}\0`)
+  for (const entry of entries) hash.update(`file\0${entry.path}\0${entry.oid ?? 'absent'}\0`)
+  return hash.digest('hex')
+}
+
+export const shortSnapshotKey = (key: string): string => key.slice(0, 12)
+
+/** Blob ids at `ref`, in the order asked for; a path outside that tree is simply not listed. */
+async function blobOids(run: GitRunner, ref: string, paths: readonly string[]): Promise<SnapshotEntry[]> {
+  const listed = await git(run, ['ls-tree', '-z', ref, '--', ...paths])
+  const oids = new Map<string, string>()
+  for (const entry of listed.stdout.split('\0')) {
+    const [meta, path] = entry.split('\t')
+    const oid = meta?.split(' ')[2]
+    if (path && oid) oids.set(path, oid)
+  }
+  return paths.map((path) => ({ path, oid: oids.get(path) ?? null }))
+}
+
+/** The snapshot key of the repository as committed at `ref`. */
+export async function readSnapshotKey(run: GitRunner, ref: string, baseBranch: string): Promise<string> {
+  const root = await git(run, ['ls-tree', '--name-only', ref])
+  const paths = [SETUP_SCRIPT, ...snapshotKeyPaths(root.stdout.split('\n').filter(Boolean))]
+  return snapshotKey(baseBranch, await blobOids(run, ref, paths))
+}
+
+/**
+ * Fetches `baseBranch` into FETCH_HEAD in a repository restored from a snapshot and
+ * returns its key there, so the caller can tell whether the snapshot still applies.
+ */
+export async function fetchBaseKey(
+  supervisor: SupervisorClient,
+  source: CloneSource,
+  baseBranch: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const run = repoGit(supervisor, {}, signal)
+  const fetch = async (env: Record<string, string>): Promise<RunReply> =>
+    git((argv, opts) => run(argv, { ...opts, env }), ['fetch', '--force', 'origin', baseBranch], { timeoutMs: CLONE_TIMEOUT_MS })
+  if (source.kind === 'github') await withAskpass(supervisor, source.token, fetch)
+  else await fetch({})
+  return readSnapshotKey(run, 'FETCH_HEAD', baseBranch)
+}
+
+/**
+ * Puts a restored checkout back where a fresh clone would be: `baseBranch` at the tip
+ * just fetched, with the branch of the thread the snapshot was taken from removed.
+ * Untracked files (the installed dependencies) survive, which is the point.
+ */
+export async function resetToFetchHead(run: GitRunner, baseBranch: string): Promise<void> {
+  await git(run, ['checkout', '-B', baseBranch])
+  await git(run, ['reset', '--hard', 'FETCH_HEAD'])
+  const heads = await git(run, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/'])
+  for (const branch of heads.stdout.split('\n').filter((b) => b && b !== baseBranch)) {
+    await git(run, ['branch', '-D', branch])
+  }
 }
 
 export async function prepareBranch(run: GitRunner, branch: string): Promise<void> {
@@ -126,20 +223,21 @@ async function runScript(
   }
 }
 
+/** `ran` is whether the repo has a setup script at all; `ok` whether it exited 0. */
 export async function runSetup(
   supervisor: SupervisorClient,
   exec: ExecSocket,
   env: Record<string, string>,
   sink: LogSink,
   signal?: AbortSignal,
-): Promise<boolean> {
-  if (!(await isExecutable(supervisor, SETUP_SCRIPT))) return false
+): Promise<{ ran: boolean; ok: boolean }> {
+  if (!(await isExecutable(supervisor, SETUP_SCRIPT))) return { ran: false, ok: false }
   sink('info', `Running ${SETUP_SCRIPT}`)
   // Servers belong in services; whatever setup leaves running in its process group is stopped with it.
   const code = await runScript(exec, [`./${SETUP_SCRIPT}`], env, sink, { timeoutMs: SETUP_TIMEOUT_MS, detach: false, killGroupOnExit: true, ...(signal ? { signal } : {}) })
   if (code === 0) sink('info', `${SETUP_SCRIPT} finished`)
   else if (code !== null) sink('warn', `${SETUP_SCRIPT} exited with code ${code}`)
-  return true
+  return { ran: true, ok: code === 0 }
 }
 
 export async function runResume(supervisor: SupervisorClient, exec: ExecSocket, env: Record<string, string>, sink: LogSink): Promise<void> {

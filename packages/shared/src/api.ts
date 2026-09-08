@@ -137,6 +137,17 @@ export type CreateProjectRequest =
 /** GET /api/projects/:id -> Project ; PATCH /api/projects/:id { name?, defaultBranch? } ; DELETE -> 204 (fails 409 while threads exist unless ?force=1) */
 export type UpdateProjectRequest = { name?: string; defaultBranch?: string }
 
+/**
+ * GET /api/snapshots -> storage held by project snapshots.
+ * DELETE /api/projects/:id/snapshot -> 204; the next thread on the project builds a new one.
+ */
+export type SnapshotsResponse = {
+  enabled: boolean
+  count: number
+  totalBytes: number
+  budgetBytes: number
+}
+
 /** GET /api/projects/:id/env -> { vars } ; PUT /api/projects/:id/env { vars: [{name, value, kind}] } replaces all ; values omitted keep existing */
 export type ProjectEnvResponse = { vars: ProjectEnvVar[] }
 export type PutProjectEnvRequest = {
