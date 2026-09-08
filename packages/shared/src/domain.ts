@@ -329,6 +329,54 @@ export type Settings = {
   defaultPermissions: PermissionPolicy
 }
 
+/**
+ * Thread transitions worth telling the user about: the agent stopped for an answer,
+ * a turn finished, or the thread failed.
+ */
+export type NotificationEvent = 'waiting' | 'finished' | 'error'
+
+export const NOTIFICATION_EVENTS: ReadonlyArray<NotificationEvent> = ['waiting', 'finished', 'error']
+
+export const NOTIFICATION_EVENT_LABELS: Record<NotificationEvent, string> = {
+  waiting: 'Needs input',
+  finished: 'Finished',
+  error: 'Error',
+}
+
+/**
+ * Where a notification is posted. `slack`, `discord`, and `ntfy` use each service's
+ * own request shape; `generic` posts Valet's JSON envelope, signed with
+ * `x-valet-signature: sha256=<hex>` when a secret is set.
+ */
+export type WebhookKind = 'slack' | 'discord' | 'ntfy' | 'generic'
+
+export const WEBHOOK_LABELS: Record<WebhookKind, string> = {
+  slack: 'Slack',
+  discord: 'Discord',
+  ntfy: 'ntfy',
+  generic: 'Generic',
+}
+
+export const MAX_WEBHOOKS = 5
+
+export type Webhook = {
+  id: string
+  kind: WebhookKind
+  /** For `ntfy` this is the full topic URL, so self-hosted instances work. */
+  url: string
+  /** `generic` only: whether an HMAC secret is stored. The secret itself is never returned. */
+  hasSecret: boolean
+  events: NotificationEvent[]
+}
+
+export type NotificationSettings = {
+  /** VAPID application server key, base64url; browsers need it to subscribe. */
+  vapidPublicKey: string
+  /** Browsers with a stored push subscription. */
+  browsers: number
+  webhooks: Webhook[]
+}
+
 /** Slug for branch names and container names: lowercase, hyphens, max 40 chars. */
 export function slugify(input: string): string {
   return (

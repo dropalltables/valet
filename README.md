@@ -97,6 +97,10 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   through the main host (logging out revokes those cookies), and *Share* issues
   links that open one portal for 1 hour to 7 days without a login. Request bodies
   sent to a portal are limited to 256 MB.
+- **Notifications.** A thread that needs input, finishes a turn, or errors notifies
+  through browser push (enabled per browser under Settings) and up to five outbound
+  webhooks (Slack, Discord, ntfy, or a signed JSON POST). Push needs `VALET_BASE_URL`
+  on HTTPS, except on localhost.
 
 ## Project configuration
 

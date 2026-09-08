@@ -18,13 +18,18 @@ import type {
   GitHubReposResponse,
   Health,
   LoginRequest,
+  NotificationTestResponse,
+  NotificationsResponse,
   PermissionDecisionRequest,
   PortalAuthUrlResponse,
   PortalsResponse,
   Project,
   ProjectEnvResponse,
   ProjectsResponse,
+  PushEndpointRequest,
   PushResponse,
+  PushSubscriptionRequest,
+  PutWebhooksRequest,
   PutCredentialRequest,
   PutProjectEnvRequest,
   QuestionAnswerRequest,
@@ -93,6 +98,19 @@ export const api = {
   settings: {
     get: () => request<Settings>('/api/settings'),
     update: (body: UpdateSettingsRequest) => request<Settings>('/api/settings', { method: 'PUT', body: json(body) }),
+  },
+  notifications: {
+    get: () => request<NotificationsResponse>('/api/notifications'),
+    subscribe: (body: PushSubscriptionRequest) =>
+      request<void>('/api/notifications/subscriptions', { method: 'POST', body: json(body) }),
+    unsubscribe: (body: PushEndpointRequest) =>
+      request<void>('/api/notifications/subscriptions', { method: 'DELETE', body: json(body) }),
+    test: (body: PushEndpointRequest) =>
+      request<NotificationTestResponse>('/api/notifications/test', { method: 'POST', body: json(body) }),
+    putWebhooks: (body: PutWebhooksRequest) =>
+      request<NotificationsResponse>('/api/notifications/webhooks', { method: 'PUT', body: json(body) }),
+    testWebhook: (id: string) =>
+      request<NotificationTestResponse>(`/api/notifications/webhooks/${id}/test`, { method: 'POST' }),
   },
   credentials: {
     list: () => request<CredentialsResponse>('/api/credentials'),

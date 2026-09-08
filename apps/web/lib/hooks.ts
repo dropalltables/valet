@@ -22,6 +22,10 @@ export function useSettings() {
   return useSWR('settings', () => api.settings.get(), { revalidateOnFocus: false })
 }
 
+export function useNotifications() {
+  return useSWR('notifications', () => api.notifications.get(), { revalidateOnFocus: false })
+}
+
 export function useCredentials() {
   return useSWR('credentials', () => api.credentials.list())
 }

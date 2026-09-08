@@ -30,6 +30,8 @@ import type { EventLog } from '../events/log.js'
 import { GitHub } from '../git/github.js'
 import { errorMessage, logger } from '../logger.js'
 import type { ModelCatalog } from '../models/catalog.js'
+import type { NotificationService } from '../notifications/service.js'
+import { pushEndpointSchema, pushSubscriptionSchema, putWebhooksSchema } from '../notifications/service.js'
 import type { PortalGateway } from '../portals/gateway.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SettingsService } from '../settings.js'
@@ -49,6 +51,7 @@ export type AppDeps = {
   deviceLogins: DeviceLoginManager
   catalog: ModelCatalog
   settings: SettingsService
+  notifications: NotificationService
   projects: ProjectService
   threads: ThreadService
   portals: PortalGateway
@@ -157,6 +160,25 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get('/api/settings', async (c) => c.json(await deps.settings.get()))
   app.put('/api/settings', jsonBody(updateSettingsSchema), async (c) => c.json(await deps.settings.update(c.req.valid('json'))))
+
+  // ---- notifications ---------------------------------------------------------------
+
+  app.get('/api/notifications', async (c) => c.json(await deps.notifications.get()))
+  app.post('/api/notifications/subscriptions', jsonBody(pushSubscriptionSchema), async (c) => {
+    await deps.notifications.subscribe(c.req.valid('json'))
+    return c.body(null, 204)
+  })
+  app.delete('/api/notifications/subscriptions', jsonBody(pushEndpointSchema), async (c) => {
+    await deps.notifications.unsubscribe(c.req.valid('json').endpoint)
+    return c.body(null, 204)
+  })
+  app.post('/api/notifications/test', jsonBody(pushEndpointSchema), async (c) =>
+    c.json(await deps.notifications.testPush(c.req.valid('json').endpoint)),
+  )
+  app.put('/api/notifications/webhooks', jsonBody(putWebhooksSchema), async (c) =>
+    c.json(await deps.notifications.putWebhooks(c.req.valid('json').webhooks)),
+  )
+  app.post('/api/notifications/webhooks/:id/test', async (c) => c.json(await deps.notifications.testWebhook(c.req.param('id'))))
 
   // ---- agents ----------------------------------------------------------------------
 

@@ -24,6 +24,8 @@ import type {
   FileEntry,
   Health,
   ModelOption,
+  NotificationEvent,
+  NotificationSettings,
   PermissionPolicy,
   Portal,
   Project,
@@ -33,6 +35,7 @@ import type {
   Settings,
   Thread,
   ThreadStatus,
+  WebhookKind,
 } from './domain.js'
 import type { StoredEvent } from './events.js'
 import type { CreateServiceRequest } from './supervisor.js'
@@ -117,6 +120,36 @@ export type AgentInfo = {
   modelsError: string | null
 }
 export type AgentsResponse = { agents: AgentInfo[] }
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+/**
+ * Core notifies on three thread transitions (see `NotificationEvent`) through Web
+ * Push (one subscription per browser) and outbound webhooks.
+ *
+ * GET    /api/notifications -> NotificationSettings
+ * POST   /api/notifications/subscriptions PushSubscriptionRequest -> 204
+ * DELETE /api/notifications/subscriptions { endpoint } -> 204
+ * POST   /api/notifications/test { endpoint } -> NotificationTestResponse (that browser only)
+ * PUT    /api/notifications/webhooks -> NotificationSettings (replaces the list; a
+ *        webhook whose `secret` is omitted keeps the stored one)
+ * POST   /api/notifications/webhooks/:id/test -> NotificationTestResponse
+ */
+export type NotificationsResponse = NotificationSettings
+
+/** `PushSubscription.toJSON()` from the browser, minus fields core does not store. */
+export type PushSubscriptionRequest = { endpoint: string; keys: { p256dh: string; auth: string } }
+
+/** Names one stored subscription: the one to forget, or the one to test. */
+export type PushEndpointRequest = { endpoint: string }
+
+export type PutWebhooksRequest = {
+  webhooks: Array<{ id?: string; kind: WebhookKind; url: string; secret?: string; events: NotificationEvent[] }>
+}
+
+export type NotificationTestResponse = { ok: boolean; error: string | null }
 
 // ---------------------------------------------------------------------------
 // Projects

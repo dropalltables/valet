@@ -13,6 +13,7 @@ import { EventLog } from './events/log.js'
 import { GitHub, parseGitHubUrl } from './git/github.js'
 import { errorMessage, logger } from './logger.js'
 import { ModelCatalog, STALE_AFTER_MS } from './models/catalog.js'
+import { NotificationService } from './notifications/service.js'
 import { PortalAuth } from './portals/auth.js'
 import { PortalGateway } from './portals/gateway.js'
 import { PortalUrls } from './portals/urls.js'
@@ -39,7 +40,7 @@ async function main(): Promise<void> {
 
   const events = new EventLog(db)
   const credentials = new CredentialStore(db, cipher)
-  const settings = new SettingsService(db, cfg)
+  const settings = new SettingsService(db, cfg, cipher)
   const projects = new ProjectService(db, cipher, cfg, events, async (repoUrl) => {
     const token = await credentials.githubToken()
     const ref = parseGitHubUrl(repoUrl)
@@ -55,8 +56,10 @@ async function main(): Promise<void> {
   await portalAuth.load()
   auth.onLogout(() => portalAuth.revokeOwners())
   const portals = new PortalGateway({ cfg, urls: portalUrls, portalAuth, auth, threads })
+  const notifications = new NotificationService({ db, cfg, cipher, events, settings })
+  notifications.watch()
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, projects, threads, portals })
+  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, threads, portals })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
     log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server

@@ -20,12 +20,14 @@
     "hono": "^4.13.7",
     "nanoid": "^6.0.1",
     "pg": "^8.23.0",
+    "web-push": "^3.6.7",
     "ws": "^8.21.3",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/dockerode": "^4.0.1",
     "@types/pg": "^8.23.1",
+    "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.1",
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.28.2",

@@ -33,7 +33,8 @@ export function proxy(request: NextRequest): NextResponse {
     return NextResponse.rewrite(new URL(pathname + search, core))
   }
 
-  if (pathname.startsWith('/_next/') || pathname === '/favicon.ico') return NextResponse.next()
+  // `/sw.js` is fetched by the service worker's own update check, which has no cookie to send.
+  if (pathname.startsWith('/_next/') || pathname === '/favicon.ico' || pathname === '/sw.js') return NextResponse.next()
 
   if (process.env.VALET_PASSWORD && pathname !== '/login' && !request.cookies.has('valet_session')) {
     const login = new URL('/login', request.url)
