@@ -44,6 +44,8 @@ export class DeviceLoginManager {
     private readonly db: Db,
     private readonly docker: DockerClient,
     private readonly store: CredentialStore,
+    /** Runs after a completed login stored its credential. */
+    private readonly onStored: () => void,
   ) {}
 
   /** Helper containers only live as long as the core process that started them. */
@@ -151,6 +153,7 @@ export class DeviceLoginManager {
         const email = emailFromIdToken(authJson.tokens?.id_token)
         await this.store.put('codex', { authJson }, email ? `ChatGPT (${email})` : 'ChatGPT', 'oauth')
         await this.update(id, { status: 'complete' })
+        this.onStored()
       }
 
       void finish()

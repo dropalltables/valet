@@ -12,6 +12,8 @@ const NAMES_EVERY_POLLS = 10
 const UNREACHABLE_AFTER = 3
 
 export type PollerHooks = {
+  /** Pids whose listeners (and their children's) are the agent's own, not the project's. */
+  excludePids: () => number[]
   onChange: (portals: StoredPortal[]) => void
   /** The supervisor has not answered for a while; the owner decides whether the container is gone. */
   onUnreachable: () => void
@@ -74,7 +76,7 @@ export class PortalPoller {
   }
 
   private async poll(): Promise<void> {
-    const { ports } = await this.supervisor.ports()
+    const { ports } = await this.supervisor.ports(this.hooks.excludePids())
     const portKey = ports.map((p) => p.port).join(',')
     if (portKey !== this.lastPortKey || this.polls % NAMES_EVERY_POLLS === 0) {
       this.names = parseNames(await this.supervisor.fsRead(SANDBOX.portsFile).catch(() => null))

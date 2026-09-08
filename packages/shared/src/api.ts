@@ -23,6 +23,7 @@ import type {
   DiffStats,
   FileEntry,
   Health,
+  ModelOption,
   PermissionPolicy,
   Portal,
   Project,
@@ -89,15 +90,28 @@ export type GitHubReposResponse = { repos: GitHubRepo[] }
 /** GET /api/credentials/github/repos/:owner/:repo/branches -> { branches: string[], defaultBranch } */
 export type GitHubBranchesResponse = { branches: string[]; defaultBranch: string }
 
-/** GET /api/agents -> availability and model lists */
+/**
+ * GET /api/agents -> availability and model lists
+ * POST /api/agents/refresh?agent=claude|codex -> AgentsResponse
+ * Re-reads the model list from the CLI (both agents without `agent`), running it in a
+ * helper sandbox with the stored credential; waits for the result. A failed refresh
+ * keeps the previous list and reports the error in `modelsError`.
+ */
+export type ModelsSource = 'cli' | 'api' | 'default'
 export type AgentInfo = {
   id: AgentKind
   label: string
   /** False when no credential is configured. */
   available: boolean
   reason: string | null
-  models: Array<{ id: string; label: string }>
+  models: ModelOption[]
+  /** The settings default when the list contains it, else the CLI's own default, else the first entry. */
   defaultModel: string
+  /** `cli`: reported by the CLI; `api`: the vendor's models API; `default`: the static fallback list. */
+  modelsSource: ModelsSource
+  modelsRefreshedAt: string | null
+  /** Why the last refresh failed; null after a success or when none ran. */
+  modelsError: string | null
 }
 export type AgentsResponse = { agents: AgentInfo[] }
 

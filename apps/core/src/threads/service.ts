@@ -44,11 +44,11 @@ import { titleFromPrompt, toListItem, toPortals, toThread } from './mapper.js'
 import {
   cloneRepo,
   prepareBranch,
-  readCodexAuth,
   repoExists,
   repoGit,
   runResume,
   runSetup,
+  syncCodexAuth,
   writeCodexHome,
   writeEnvFile,
   type CloneSource,
@@ -108,8 +108,6 @@ export class ThreadService {
   private readonly live = new Map<string, Live>()
   private readonly prChecked = new Map<string, number>()
   private sweeper: NodeJS.Timeout | null = null
-  /** Live model list reported by Codex `model/list`, preferred over the static defaults. */
-  codexModels: Array<{ id: string; label: string }> | null = null
 
   private readonly db: Db
   private readonly cfg: Config
@@ -331,6 +329,7 @@ export class ThreadService {
   private attachSandbox(live: Live, containerId: string, supervisor: SupervisorClient): LiveSandbox {
     if (live.sandbox) this.dropSandbox(live)
     const portals = new PortalPoller(live.id, supervisor, {
+      excludePids: () => (live.adapter?.pid == null ? [] : [live.adapter.pid]),
       onChange: (list) => void this.setPortals(live.id, list),
       onUnreachable: () => void this.checkSandbox(live.id).catch((err) => log.warn('sandbox check failed', { id: live.id, err })),
     })
@@ -632,9 +631,6 @@ export class ThreadService {
           .then(() => this.events.append(id, { type: 'session', agentSessionId: sessionId }))
           .catch((err) => log.warn('failed to store session id', { id, err }))
       },
-      onModels: (models) => {
-        if (row.agent === 'codex') this.codexModels = models
-      },
       onExit: (info) => void this.onAdapterExit(live, adapter, info),
     })
     return adapter
@@ -702,7 +698,7 @@ export class ThreadService {
 
     const supervisor = live.sandbox?.supervisor
     if (supervisor) {
-      if (row.agent === 'codex') await this.syncCodexAuth(supervisor).catch((err) => log.warn('codex auth sync failed', { id, err }))
+      if (row.agent === 'codex') await syncCodexAuth(supervisor, this.credentials).catch((err) => log.warn('codex auth sync failed', { id, err }))
       await this.refreshDiffStats(id, supervisor, row.baseBranch)
     }
 
@@ -751,14 +747,6 @@ export class ThreadService {
       live.currentTurnId = null
       live.stoppingAdapter = false
     }
-  }
-
-  private async syncCodexAuth(supervisor: SupervisorClient): Promise<void> {
-    const auth = await this.credentials.codexAuth()
-    if (auth?.mode !== 'oauth') return
-    const current = await readCodexAuth(supervisor)
-    if (!current?.tokens || !current.last_refresh || current.last_refresh === auth.authJson.last_refresh) return
-    await this.credentials.put('codex', { authJson: current }, auth.label, 'oauth')
   }
 
   private async refreshDiffStats(id: string, supervisor: SupervisorClient, baseBranch: string): Promise<void> {

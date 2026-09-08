@@ -10,7 +10,8 @@ chmod 700 /run/user/1000
 mkdir -p /tmp/.X11-unix /tmp/.ICE-unix
 chmod 1777 /tmp/.X11-unix /tmp/.ICE-unix
 
-# A stopped container keeps /tmp, and a stale lock makes Xvnc refuse to start.
-rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+# A stopped container keeps /tmp and /run: a stale lock makes Xvnc refuse to start,
+# a stale socket makes dbus-daemon refuse to bind.
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 /run/user/1000/bus
 
 exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf

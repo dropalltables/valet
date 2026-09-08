@@ -19,7 +19,6 @@ rl.on('line', (line) => {
   const msg = JSON.parse(line)
   if (msg.method === 'initialize') return out({ id: msg.id, result: { userAgent: 'fake', codexHome: '/tmp', platformFamily: 'unix', platformOs: 'linux' } })
   if (msg.method === 'initialized') return
-  if (msg.method === 'model/list') return out({ id: msg.id, result: { data: [{ id: 'gpt-6-astra', model: 'gpt-6-astra', displayName: 'GPT-6 Astra', hidden: false, isDefault: true }, { id: 'secret', model: 'secret', displayName: 'Secret', hidden: true, isDefault: false }], nextCursor: null } })
   if (msg.method === 'thread/resume') return out({ id: msg.id, error: { code: -32600, message: 'no such thread' } })
   if (msg.method === 'thread/start') return out({ id: msg.id, result: { thread: { id: T, model: msg.params.model, cwd: msg.params.cwd, preview: '' }, model: msg.params.model } })
   if (msg.method === 'turn/interrupt') {
@@ -118,18 +117,18 @@ function startOptions(rec: ReturnType<typeof recorder>, extra: Partial<Parameter
 const ev = <T extends ThreadEvent['type']>(events: ThreadEvent[], type: T, n = 0): Extract<ThreadEvent, { type: T }> =>
   events.filter((e) => e.type === type)[n] as Extract<ThreadEvent, { type: T }>
 
-test('codex: handshake, model list, items, deltas, usage, turn.end', async (t) => {
+test('codex: handshake, items, deltas, usage, turn.end', async (t) => {
   const rec = recorder()
-  const models: Array<{ id: string; label: string }>[] = []
   const adapter = new CodexAdapter(cli.exe)
   t.after(() => adapter.stop())
-  await adapter.start(startOptions(rec, { onModels: (m) => models.push(m), resumeSessionId: 'stale-thread' }))
+  await adapter.start(startOptions(rec, { resumeSessionId: 'stale-thread' }))
   assert.deepEqual(rec.sessionIds, ['thread-1'])
+  assert.equal(typeof adapter.pid, 'number')
   await adapter.sendTurn('t1', 'hello', [{ mediaType: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }], 'queue')
   await rec.waitFor('turn.end')
   await adapter.stop()
+  assert.equal(adapter.pid, null)
 
-  assert.deepEqual(models, [[{ id: 'gpt-6-astra', label: 'GPT-6 Astra' }]])
   assert.deepEqual(types(rec.events), [
     'reasoning.delta',
     'reasoning.end',

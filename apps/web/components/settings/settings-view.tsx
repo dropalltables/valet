@@ -49,8 +49,13 @@ const METHOD_LABEL: Record<'oauth' | 'api-key', string> = { oauth: 'Subscription
 
 function Credentials() {
   const { data, mutate } = useCredentials()
+  const { mutate: mutateAgents } = useAgents()
   const byKind = new Map<CredentialKind, CredentialStatus>((data ?? []).map((c) => [c.kind, c]))
   if (!data) return null
+  const changed = (): void => {
+    void mutate()
+    void mutateAgents()
+  }
 
   return (
     <Section title="Credentials">
@@ -60,15 +65,17 @@ function Credentials() {
           title="Claude Code"
           status={byKind.get('claude')}
           fields={[{ key: 'token', label: 'Token', placeholder: 'sk-ant-oat... or sk-ant-api...' }]}
-          onChange={() => void mutate()}
+          models={<ModelsLine agent="claude" configured={byKind.get('claude')?.configured ?? false} />}
+          onChange={changed}
         />
         <CredentialRow
           kind="codex"
           title="Codex"
           status={byKind.get('codex')}
           fields={[{ key: 'apiKey', label: 'API key', placeholder: 'sk-...' }]}
-          extra={<CodexDeviceLogin onComplete={() => void mutate()} />}
-          onChange={() => void mutate()}
+          models={<ModelsLine agent="codex" configured={byKind.get('codex')?.configured ?? false} />}
+          extra={<CodexDeviceLogin onComplete={changed} />}
+          onChange={changed}
         />
         <CredentialRow
           kind="github"
@@ -89,6 +96,7 @@ function CredentialRow({
   title,
   status,
   fields,
+  models,
   extra,
   onChange,
 }: {
@@ -96,6 +104,7 @@ function CredentialRow({
   title: string
   status: CredentialStatus | undefined
   fields: Field[]
+  models?: ReactNode
   extra?: ReactNode
   onChange: () => void
 }) {
@@ -149,6 +158,7 @@ function CredentialRow({
           <span className="text-xs text-muted-foreground">Not configured</span>
         )}
       </div>
+      {models}
       {extra && <div>{extra}</div>}
       <div className="flex flex-wrap items-end gap-3">
         <form onSubmit={save} className="flex flex-1 items-end gap-2">
@@ -169,6 +179,50 @@ function CredentialRow({
           </Button>
         </form>
       </div>
+    </div>
+  )
+}
+
+/** "Models: N · refreshed <when>" for the agent's catalog, with a Refresh that re-asks the CLI. */
+function ModelsLine({ agent, configured }: { agent: AgentKind; configured: boolean }) {
+  const { data, mutate } = useAgents()
+  const [busy, setBusy] = useState(false)
+  const info = data?.agents.find((a) => a.id === agent)
+  // Saving a credential starts a refresh in the background; poll until it lands or fails.
+  const pending = configured && info?.modelsSource === 'default' && !info.modelsError
+  useEffect(() => {
+    if (!pending) return
+    const timer = setInterval(() => void mutate(), 5000)
+    return () => clearInterval(timer)
+  }, [pending, mutate])
+  if (!info) return null
+
+  async function refresh(): Promise<void> {
+    setBusy(true)
+    try {
+      await mutate(await api.agents.refresh(agent), { revalidate: false })
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const summary =
+    info.modelsSource === 'default'
+      ? 'Models: defaults'
+      : `Models: ${info.models.length}${info.modelsRefreshedAt ? ` · refreshed ${relativeTime(info.modelsRefreshedAt)}` : ''}`
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span>{summary}</span>
+      {info.modelsError && (
+        <span role="alert" className="text-destructive">
+          {info.modelsError}
+        </span>
+      )}
+      <Button size="xs" variant="ghost" disabled={busy || !configured} onClick={() => void refresh()}>
+        {busy ? 'Refreshing' : 'Refresh'}
+      </Button>
     </div>
   )
 }

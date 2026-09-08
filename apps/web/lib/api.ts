@@ -1,4 +1,5 @@
 import type {
+  AgentKind,
   AgentsResponse,
   ChangesResponse,
   CreatePrRequest,
@@ -102,7 +103,10 @@ export const api = {
     githubBranches: (owner: string, repo: string) =>
       request<GitHubBranchesResponse>(`/api/credentials/github/repos/${owner}/${repo}/branches`),
   },
-  agents: () => request<AgentsResponse>('/api/agents'),
+  agents: {
+    list: () => request<AgentsResponse>('/api/agents'),
+    refresh: (agent?: AgentKind) => request<AgentsResponse>(`/api/agents/refresh${q({ agent })}`, { method: 'POST' }),
+  },
   projects: {
     list: () => request<ProjectsResponse>('/api/projects'),
     create: (body: CreateProjectRequest) => request<Project>('/api/projects', { method: 'POST', body: json(body) }),

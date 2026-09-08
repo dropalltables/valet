@@ -117,8 +117,10 @@ export class SupervisorClient {
     )
   }
 
-  async ports(): Promise<PortsReply> {
-    const res = await this.expectOk(await this.request('/ports', { timeoutMs: 5_000 }), 'ports')
+  /** Listening ports, minus loopback-only ones owned by `excludePids` or their descendants (the agent's own bridges). */
+  async ports(excludePids: number[] = []): Promise<PortsReply> {
+    const q = excludePids.length > 0 ? `?excludePids=${excludePids.join(',')}` : ''
+    const res = await this.expectOk(await this.request(`/ports${q}`, { timeoutMs: 5_000 }), 'ports')
     return portsReplySchema.parse(await res.json())
   }
 

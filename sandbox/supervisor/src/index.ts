@@ -8,7 +8,7 @@ import { fsList, fsMkdir, fsRead, fsWrite } from './fs.js'
 import { health } from './health.js'
 import { HttpError, parseJson, readBody, sendJson } from './http.js'
 import { parsePortalUrl, proxyPortalRequest, proxyPortalUpgrade } from './portal.js'
-import { listPorts } from './ports.js'
+import { listPorts, parseExcludePids } from './ports.js'
 import { handlePty } from './pty.js'
 import { RUN_BODY_LIMIT, parseRunRequest, runToCompletion } from './run.js'
 import { connectVnc, relayVnc } from './vnc.js'
@@ -35,7 +35,7 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL): Promi
     case 'POST /fs/mkdir':
       return fsMkdir(req, res)
     case 'GET /ports':
-      return sendJson(res, 200, await listPorts())
+      return sendJson(res, 200, await listPorts(parseExcludePids(url.searchParams.get('excludePids'))))
     default:
       throw new HttpError(404, 'not found')
   }

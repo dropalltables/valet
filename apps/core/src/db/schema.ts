@@ -1,5 +1,5 @@
 import { bigint, bigserial, boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core'
-import type { AgentKind, DiffStats, PermissionPolicy, ProjectSource, PullRequestState, Settings, ThreadStatus } from '@valet/shared'
+import type { AgentKind, DiffStats, ModelOption, ModelsSource, PermissionPolicy, ProjectSource, PullRequestState, Settings, ThreadStatus } from '@valet/shared'
 
 export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
@@ -117,8 +117,21 @@ export const deviceLogins = pgTable('device_logins', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
 
+/**
+ * Model list per agent as last reported by its CLI. `source` is `default` (and
+ * `models` empty) while no refresh has succeeded; a failed refresh only sets `error`.
+ */
+export const modelCatalog = pgTable('model_catalog', {
+  agent: text('agent').$type<AgentKind>().primaryKey(),
+  models: jsonb('models').$type<ModelOption[]>().notNull(),
+  source: text('source').$type<ModelsSource>().notNull(),
+  refreshedAt: timestamp('refreshed_at', { withTimezone: true }),
+  error: text('error'),
+})
+
 export type ProjectRow = typeof projects.$inferSelect
 export type ThreadRow = typeof threads.$inferSelect
 export type ThreadEventRow = typeof threadEvents.$inferSelect
 export type CredentialRow = typeof credentials.$inferSelect
 export type DeviceLoginRow = typeof deviceLogins.$inferSelect
+export type ModelCatalogRow = typeof modelCatalog.$inferSelect

@@ -15,7 +15,7 @@ export function useNow(intervalMs = 30_000): number {
 }
 
 export function useAgents() {
-  return useSWR('agents', () => api.agents(), { revalidateOnFocus: false })
+  return useSWR('agents', () => api.agents.list(), { revalidateOnFocus: false })
 }
 
 export function useSettings() {

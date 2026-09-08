@@ -86,10 +86,13 @@ function Composer() {
     if (agentInfo && agentInfo.models.length > 0) return agentInfo.models
     return agent ? DEFAULT_MODELS[agent] : []
   }, [agentInfo, agent])
+  // The first candidate the list actually contains: the pick, the settings default, then core's resolved default.
   const effectiveModel =
-    model && models.some((m) => m.id === model)
-      ? model
-      : (agent && settings?.defaultModel[agent]) || agentInfo?.defaultModel || (agent ? DEFAULT_MODEL[agent] : null)
+    [model, agent && settings?.defaultModel[agent], agentInfo?.defaultModel, agent && DEFAULT_MODEL[agent]].find(
+      (id): id is string => !!id && models.some((m) => m.id === id),
+    ) ??
+    models[0]?.id ??
+    null
 
   const branches = branchData?.branches ?? (project ? [project.defaultBranch] : [])
   const effectiveBranch = baseBranch && branches.includes(baseBranch) ? baseBranch : (project?.defaultBranch ?? null)

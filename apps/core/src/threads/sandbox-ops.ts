@@ -1,6 +1,6 @@
 import { SANDBOX, type RunReply } from '@valet/shared'
 import type { ExecSocket, SupervisorClient } from '../docker/supervisor-client.js'
-import type { CodexAuthJson } from '../credentials/store.js'
+import type { CodexAuthJson, CredentialStore } from '../credentials/store.js'
 import { withAskpass } from '../git/askpass.js'
 import { git, type GitRunner } from '../git/changes.js'
 
@@ -171,4 +171,16 @@ export async function readCodexAuth(supervisor: SupervisorClient): Promise<Codex
   } catch {
     return null
   }
+}
+
+/**
+ * Codex rewrites auth.json when it refreshes its tokens, and a rotated refresh
+ * token invalidates the stored one; whatever ran codex must copy the result back.
+ */
+export async function syncCodexAuth(supervisor: SupervisorClient, credentials: CredentialStore): Promise<void> {
+  const auth = await credentials.codexAuth()
+  if (auth?.mode !== 'oauth') return
+  const current = await readCodexAuth(supervisor)
+  if (!current?.tokens || !current.last_refresh || current.last_refresh === auth.authJson.last_refresh) return
+  await credentials.put('codex', { authJson: current }, auth.label, 'oauth')
 }

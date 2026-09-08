@@ -13,14 +13,26 @@ export const AGENT_LABELS: Record<AgentKind, string> = {
   codex: 'Codex',
 }
 
+/** One selectable model, as the CLI reports it (see the model catalog in core). */
+export type ModelOption = {
+  /** What `--model` accepts: a Claude alias (`opus`), or a Codex model id (`gpt-6-astra`). */
+  id: string
+  label: string
+  /** Codex only: reasoning efforts the model supports. */
+  reasoningEfforts?: string[]
+  /** Codex only: the model the CLI would pick on its own. */
+  default?: boolean
+}
+
 /**
- * Fallback model lists. Core asks the CLIs for live lists when it can
- * (`codex app-server model/list`); these are what the UI shows before that.
+ * Fallback model lists, shown until core has asked the CLIs (`claude` answers a
+ * `list_models` control request, `codex app-server` a `model/list` request) with the
+ * stored credential, and whenever that failed.
  *
  * Claude Code accepts the aliases `opus`, `sonnet`, `haiku`, which resolve to the
  * newest model of that tier; sending an alias is safer than pinning a dated id.
  */
-export const DEFAULT_MODELS: Record<AgentKind, ReadonlyArray<{ id: string; label: string }>> = {
+export const DEFAULT_MODELS: Record<AgentKind, ReadonlyArray<ModelOption>> = {
   claude: [
     { id: 'opus', label: 'Opus' },
     { id: 'sonnet', label: 'Sonnet' },

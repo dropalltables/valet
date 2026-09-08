@@ -12,6 +12,7 @@ import { DockerClient } from './docker/client.js'
 import { EventLog } from './events/log.js'
 import { GitHub, parseGitHubUrl } from './git/github.js'
 import { errorMessage, logger } from './logger.js'
+import { ModelCatalog, STALE_AFTER_MS } from './models/catalog.js'
 import { PortalAuth } from './portals/auth.js'
 import { PortalGateway } from './portals/gateway.js'
 import { PortalUrls } from './portals/urls.js'
@@ -47,14 +48,15 @@ async function main(): Promise<void> {
   })
   const portalUrls = new PortalUrls(cfg)
   const threads = new ThreadService({ db, cfg, cipher, docker, events, projects, credentials, settings, portalUrls })
-  const deviceLogins = new DeviceLoginManager(db, docker, credentials)
+  const catalog = new ModelCatalog(db, docker, credentials)
+  const deviceLogins = new DeviceLoginManager(db, docker, credentials, () => void catalog.refresh('codex'))
   const auth = new Auth(cfg, cipher)
   const portalAuth = new PortalAuth(cipher, auth.enabled, db)
   await portalAuth.load()
   auth.onLogout(() => portalAuth.revokeOwners())
   const portals = new PortalGateway({ cfg, urls: portalUrls, portalAuth, auth, threads })
 
-  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, settings, projects, threads, portals })
+  const app = createApp({ version: pkg.version, db, auth, docker, events, credentials, deviceLogins, catalog, settings, projects, threads, portals })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
     log.info('listening', { port: info.port, auth: auth.enabled, portalDomain: portalUrls.domain })
   }) as Server
@@ -63,6 +65,7 @@ async function main(): Promise<void> {
   await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))
   threads.startSweeper()
+  await catalog.refreshStale(STALE_AFTER_MS).catch((err: unknown) => log.error('model catalog check failed', { err }))
 
   let shuttingDown = false
   const shutdown = (signal: string): void => {

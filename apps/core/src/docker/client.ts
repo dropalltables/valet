@@ -117,7 +117,7 @@ export class DockerClient {
     return container.id
   }
 
-  /** Short-lived container from the sandbox image with no volumes (Codex device login). */
+  /** Short-lived container from the sandbox image with no volumes (Codex device login, model list refresh). */
   async createHelper(name: string, token: string): Promise<string> {
     const container = await this.docker.createContainer({
       Image: this.cfg.VALET_SANDBOX_IMAGE,

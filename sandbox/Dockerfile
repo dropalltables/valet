@@ -32,6 +32,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 # The base image's `node` user (uid 1000) becomes `valet`.
 # Chromium runs with --no-sandbox: its setuid helper (chromium-sandbox) needs to create
 # namespaces, which Docker's default seccomp profile denies. The container is the sandbox.
+# --test-type drops the "unsupported command-line flag" bar that --no-sandbox raises,
+# --hide-crash-restore-bubble the restore prompt after a kill; --window-size fills the
+# 1920x1080 desktop minus the panel, since xfwm4 ignores --start-maximized.
+# The apt lists stay in the image (about 19 MB) so `sudo apt-get install` works in a thread.
 RUN set -eux; \
     usermod -l valet -d /home/valet -m node; \
     groupmod -n valet node; \
@@ -39,30 +43,44 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
       git curl ca-certificates sudo tmux ripgrep jq less vim-tiny unzip zstd \
       python3 python3-pip python3-venv build-essential openssh-client locales procps \
+      lsof iproute2 psmisc net-tools \
       supervisor dbus-x11 tigervnc-standalone-server \
       xfce4-session xfwm4 xfdesktop4 xfce4-panel xfce4-terminal thunar fonts-dejavu \
-      chromium xdg-utils x11-utils; \
+      chromium xdg-utils x11-utils xdotool wmctrl scrot; \
     mkdir -p -m 755 /etc/apt/keyrings; \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
     chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends gh; \
-    rm -rf /var/lib/apt/lists/*; \
     sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen; \
     locale-gen; \
     echo 'valet ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/valet; \
     chmod 0440 /etc/sudoers.d/valet; \
-    printf '%s\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage"' > /etc/chromium.d/valet; \
+    printf '%s\n' 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-dev-shm-usage --test-type --hide-crash-restore-bubble --window-size=1920,1040"' > /etc/chromium.d/valet; \
+    printf '%s\n' \
+      '# remote extensions on by default' \
+      'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --enable-remote-extensions"' \
+      '# load the extensions installed to /usr/share/chromium/extensions, when there are any' \
+      'if [ -n "$(ls -A /usr/share/chromium/extensions 2>/dev/null)" ]; then' \
+      '  export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --load-extension=$(ls -dm /usr/share/chromium/extensions/* | tr -d '"'"'\n'"'"')"' \
+      'fi' > /etc/chromium.d/extensions; \
     mkdir -p /valet/repos /home/valet/workspace /home/valet/.claude /home/valet/.codex; \
     chown -R valet:valet /home/valet /valet
 
-# Agent CLIs, global and world-readable (npm's prefix is /usr/local here).
-# The platform binaries are optional deps; the version checks below fail the build if they did not land.
-RUN npm install -g --include=optional --allow-scripts=@anthropic-ai/claude-code --no-audit --no-fund \
+# Agent CLIs and the browser driver, global and world-readable (npm's prefix is /usr/local here).
+# The platform binaries are optional deps or postinstall downloads; the version checks below fail the build if they did not land.
+# agent-browser drives the system Chromium (AGENT_BROWSER_EXECUTABLE_PATH below) instead of downloading its own.
+RUN npm install -g --include=optional --allow-scripts=@anthropic-ai/claude-code,agent-browser --no-audit --no-fund \
       @anthropic-ai/claude-code@2.1.263 \
       @openai/codex@0.153.4 \
+      agent-browser@0.37.0 \
  && npm cache clean --force
+
+# npm 11 blocks dependency install scripts it has not been told about (`npm approve-scripts`).
+# Inside the sandbox every install script runs unreviewed: a malicious transitive
+# dependency gets code execution at install time, in a container that is already the agent's.
+RUN printf '%s\n' 'dangerously-allow-all-scripts=true' 'update-notifier=false' > /usr/local/etc/npmrc
 
 COPY --from=supervisor /out/supervisor /opt/valet/supervisor
 COPY sandbox/supervisord.conf /etc/supervisor/conf.d/valet.conf
@@ -73,6 +91,9 @@ COPY --chown=valet:valet sandbox/tmux.conf /home/valet/.tmux.conf
 ENV HOME=/home/valet \
     USER=valet \
     DISPLAY=:1 \
+    XDG_RUNTIME_DIR=/run/user/1000 \
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
     LANG=en_US.UTF-8 \
     CLAUDE_CONFIG_DIR=/home/valet/.claude \
     CODEX_HOME=/home/valet/.codex \
@@ -94,6 +115,7 @@ RUN set -eux; \
     cp /etc/xdg/xfce4/panel/default.xml /home/valet/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml; \
     claude --version; \
     codex --version; \
+    agent-browser --version; \
     gh --version; \
     uv --version; \
     bun --version; \

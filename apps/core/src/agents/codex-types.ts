@@ -133,8 +133,3 @@ export type ToolRequestUserInputQuestion = {
 }
 export type ToolRequestUserInputParams = { threadId: string; turnId: string; itemId: string; questions: ToolRequestUserInputQuestion[] }
 export type ToolRequestUserInputResponse = { answers: Record<string, { answers: string[] }> }
-
-export type ModelListResponse = {
-  data: Array<{ id: string; model: string; displayName: string; hidden: boolean; isDefault: boolean }>
-  nextCursor: string | null
-}

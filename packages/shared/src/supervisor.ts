@@ -18,7 +18,9 @@
  *   GET  /fs/read?path=         -> raw bytes (200) ; 404 ; 413 when > 5 MB
  *   PUT  /fs/write?path=&mode=  raw bytes -> 204 (creates parent dirs)
  *   POST /fs/mkdir { path }     -> 204
- *   GET  /ports                 -> PortsReply (TCP ports in LISTEN state, minus 9500 and 5901)
+ *   GET  /ports?excludePids=    -> PortsReply (TCP ports in LISTEN state, minus 9500 and 5901,
+ *                               minus listeners owned by the given pids or their descendants,
+ *                               minus loopback-only listeners of `claude`/`codex` processes)
  *   ANY  /portal/:port/*        proxied to 127.0.0.1:<port> with Host `localhost:<port>`;
  *                               WebSocket upgrades are tunnelled byte for byte. The
  *                               supervisor's own failures carry `PORTAL_ERROR_HEADER`

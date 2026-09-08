@@ -117,6 +117,10 @@ export class ClaudeAdapter implements Adapter {
 
   constructor(private readonly executable = 'claude') {}
 
+  get pid(): number | null {
+    return this.proc?.pid ?? null
+  }
+
   async start(opts: AdapterStartOptions & AdapterHooks): Promise<void> {
     if (this.started) throw new Error('adapter already started')
     this.hooks = opts

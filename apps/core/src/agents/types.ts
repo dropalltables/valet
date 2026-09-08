@@ -6,8 +6,6 @@ export type AdapterHooks = {
   onEvent(event: ThreadEvent): void
   /** Agent-side session id (Claude session uuid, Codex thread id) as soon as it is known. */
   onSessionId(id: string): void
-  /** Live model list when the CLI can report one (Codex `model/list`). */
-  onModels?: (models: Array<{ id: string; label: string }>) => void
   /** The CLI process ended on its own (crash, auth failure). The adapter is no longer started. */
   onExit(info: { code: number | null; signal: string | null; duringTurn: boolean }): void
 }
@@ -18,6 +16,8 @@ export type AdapterHooks = {
  */
 export interface Adapter {
   readonly started: boolean
+  /** Pid of the CLI process inside the sandbox while one runs. */
+  readonly pid: number | null
   /** A turn is in flight. */
   readonly busy: boolean
   /** Whether `sendTurn(..., 'steer')` injects into the running turn instead of failing. */

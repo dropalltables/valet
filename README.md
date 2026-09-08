@@ -31,6 +31,9 @@ Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup unde
 2. **Codex**: click *Sign in with ChatGPT* (device code flow) or paste an OpenAI API key.
 3. **GitHub**: paste a personal access token with `repo` scope.
 
+Saving a Claude Code or Codex credential reads that agent's model list from its CLI
+(in a short-lived sandbox container); *Refresh* under the credential reads it again.
+
 To serve Valet on a domain, put a reverse proxy (Caddy, Traefik, nginx) in front of
 port 3000 and set `VALET_BASE_URL`. WebSockets must be proxied. Portals (below) are
 subdomains, so also point a wildcard DNS record `*.valet.example.com` at the same box

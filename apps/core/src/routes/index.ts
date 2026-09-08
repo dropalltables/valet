@@ -4,7 +4,6 @@ import { z } from 'zod'
 import {
   AGENT_LABELS,
   DEFAULT_MODEL,
-  DEFAULT_MODELS,
   type AgentInfo,
   type AgentKind,
   type AgentsResponse,
@@ -27,6 +26,7 @@ import { HttpError, badRequest, notFound, statusOf } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { GitHub } from '../git/github.js'
 import { errorMessage, logger } from '../logger.js'
+import type { ModelCatalog } from '../models/catalog.js'
 import type { PortalGateway } from '../portals/gateway.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SettingsService } from '../settings.js'
@@ -44,6 +44,7 @@ export type AppDeps = {
   events: EventLog
   credentials: CredentialStore
   deviceLogins: DeviceLoginManager
+  catalog: ModelCatalog
   settings: SettingsService
   projects: ProjectService
   threads: ThreadService
@@ -148,22 +149,34 @@ export function createApp(deps: AppDeps): Hono {
 
   // ---- agents ----------------------------------------------------------------------
 
-  app.get('/api/agents', async (c) => {
-    const [creds, settings] = await Promise.all([deps.credentials.list(), deps.settings.get()])
+  const agentsResponse = async (): Promise<AgentsResponse> => {
+    const [creds, settings, catalog] = await Promise.all([deps.credentials.list(), deps.settings.get(), deps.catalog.all()])
     const agents: AgentInfo[] = (['claude', 'codex'] as AgentKind[]).map((id) => {
       const cred = creds.find((s) => s.kind === id)
-      const models = id === 'codex' && deps.threads.codexModels ? deps.threads.codexModels : [...DEFAULT_MODELS[id]]
+      const entry = catalog[id]
+      const preferred = settings.defaultModel[id] ?? DEFAULT_MODEL[id]
+      const fallback = entry.models.find((m) => m.default) ?? entry.models[0]
       return {
         id,
         label: AGENT_LABELS[id],
         available: cred?.configured === true,
         reason: cred?.configured ? null : 'No credential configured',
-        models,
-        defaultModel: settings.defaultModel[id] ?? DEFAULT_MODEL[id],
+        models: entry.models,
+        defaultModel: entry.models.some((m) => m.id === preferred) ? preferred : (fallback?.id ?? preferred),
+        modelsSource: entry.source,
+        modelsRefreshedAt: entry.refreshedAt?.toISOString() ?? null,
+        modelsError: entry.error,
       }
     })
-    const body: AgentsResponse = { agents }
-    return c.json(body)
+    return { agents }
+  }
+
+  app.get('/api/agents', async (c) => c.json(await agentsResponse()))
+  app.post('/api/agents/refresh', queryParams(z.object({ agent: agentKind.optional() })), async (c) => {
+    const { agent } = c.req.valid('query')
+    const targets: AgentKind[] = agent ? [agent] : ['claude', 'codex']
+    await Promise.all(targets.map((a) => deps.catalog.refresh(a)))
+    return c.json(await agentsResponse())
   })
 
   // ---- credentials -------------------------------------------------------------------
@@ -197,13 +210,17 @@ export function createApp(deps: AppDeps): Hono {
         if (!token) throw badRequest('token is required')
         if (!token.startsWith('sk-ant-')) throw badRequest('token must start with sk-ant-')
         const method = token.startsWith('sk-ant-oat') ? 'oauth' : 'api-key'
-        return c.json(await deps.credentials.put('claude', { token }, maskToken(token), method))
+        const status = await deps.credentials.put('claude', { token }, maskToken(token), method)
+        void deps.catalog.refresh('claude')
+        return c.json(status)
       }
       case 'codex': {
         const apiKey = body.apiKey?.trim()
         if (!apiKey) throw badRequest('apiKey is required')
         if (!apiKey.startsWith('sk-')) throw badRequest('apiKey must start with sk-')
-        return c.json(await deps.credentials.put('codex', { apiKey }, maskToken(apiKey), 'api-key'))
+        const status = await deps.credentials.put('codex', { apiKey }, maskToken(apiKey), 'api-key')
+        void deps.catalog.refresh('codex')
+        return c.json(status)
       }
       case 'github': {
         const token = body.token?.trim()
@@ -214,7 +231,9 @@ export function createApp(deps: AppDeps): Hono {
     }
   })
   app.delete('/api/credentials/:kind', async (c) => {
-    await deps.credentials.remove(parseKind(c.req.param('kind')))
+    const kind = parseKind(c.req.param('kind'))
+    await deps.credentials.remove(kind)
+    if (kind !== 'github') await deps.catalog.clear(kind)
     return c.body(null, 204)
   })
 
