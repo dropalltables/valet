@@ -74,24 +74,29 @@ so leave `VALET_DOCKER_NETWORK` and `VALET_REPOS_VOLUME` unset.
 2. Environment variables: `POSTGRES_PASSWORD`, `VALET_SECRET_KEY`, `VALET_PASSWORD`,
    `VALET_BASE_URL` (`https://valet.example.com`), `VALET_PORTAL_DOMAIN`
    (`valet.example.com`), and `VALET_IMAGE_PREFIX` when deploying published images.
-3. Set the domain on the `web` service, port 3000. Coolify's Traefik joins the stack's
-   network by itself.
-4. Portals need a wildcard host, which the domain field cannot express, so add the labels
-   to `web` yourself:
+3. Leave the domain field on `web` empty. Portals need a wildcard host, which the domain
+   field cannot express, so the compose declares the Traefik router itself from
+   `VALET_PORTAL_DOMAIN` and `VALET_CERT_RESOLVER`. Turn off "Escape special characters in
+   labels" in the application's advanced settings, or Docker Compose never interpolates
+   them. Coolify's Traefik joins the stack's network by itself.
+4. Wildcards need a DNS challenge, which Coolify's default `letsencrypt` resolver cannot do.
+   Add a resolver to Coolify's proxy (Server, Proxy, Configuration), name it in
+   `VALET_CERT_RESOLVER`, and restart the proxy. With Cloudflare:
 
    ```yaml
-   labels:
-     - traefik.enable=true
-     - traefik.http.routers.valet.rule=Host(`valet.example.com`) || HostRegexp(`^t-.+\.valet\.example\.com$`)
-     - traefik.http.routers.valet.entrypoints=https
-     - traefik.http.routers.valet.tls=true
-     - traefik.http.routers.valet.tls.certresolver=letsencrypt
-     - traefik.http.services.valet.loadbalancer.server.port=3000
+   services:
+     traefik:
+       environment:
+         - CF_DNS_API_TOKEN=<token with Zone:DNS:Edit on the zone>
+       command:
+         # keep the existing flags, add these
+         - '--certificatesresolvers.cfdns.acme.dnschallenge=true'
+         - '--certificatesresolvers.cfdns.acme.dnschallenge.provider=cloudflare'
+         - '--certificatesresolvers.cfdns.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53'
+         - '--certificatesresolvers.cfdns.acme.storage=/traefik/acme-cfdns.json'
    ```
 
-   The wildcard certificate is a one-time setting on Coolify's own proxy (Server, Proxy,
-   Dynamic Configuration): a DNS challenge for `*.valet.example.com`, since HTTP challenges
-   cannot issue wildcards. Point `valet.example.com` and `*.valet.example.com` at the server.
+   Point `valet.example.com` and `*.valet.example.com` at the server.
 5. Core mounts `/var/run/docker.sock`, which Coolify allows as it stands.
 6. Core pulls the sandbox image when it is missing, on startup and every ten minutes, with
    progress in the log and under Settings. An image name without a registry host (the default

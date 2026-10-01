@@ -85,6 +85,20 @@ services:
       VALET_PORTAL_DOMAIN: ${VALET_PORTAL_DOMAIN:-}
     ports:
       - "${VALET_BIND:-127.0.0.1}:${VALET_PORT:-3000}:3000"
+    # Portals are wildcard subdomains, which Coolify's domain field cannot express, so the
+    # router is declared here. Leave the domain field empty or two routers claim the host.
+    # Coolify escapes `$` in labels unless "Escape special characters in labels" is off;
+    # these need it off. The dots in VALET_PORTAL_DOMAIN are unescaped in the regexp,
+    # which only hosts whose DNS points here ever reach, so nothing more matches.
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.valet.rule=Host(`${VALET_PORTAL_DOMAIN}`) || HostRegexp(`^t-[^.]+\.${VALET_PORTAL_DOMAIN}$$`)
+      - traefik.http.routers.valet.entrypoints=https
+      - traefik.http.routers.valet.tls=true
+      - traefik.http.routers.valet.tls.certresolver=${VALET_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.routers.valet.tls.domains[0].main=${VALET_PORTAL_DOMAIN}
+      - traefik.http.routers.valet.tls.domains[0].sans=*.${VALET_PORTAL_DOMAIN}
+      - traefik.http.services.valet.loadbalancer.server.port=3000
     depends_on:
       core:
         condition: service_started
