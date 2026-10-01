@@ -4,8 +4,31 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+// The same palette as the review widget, so a page core serves on a portal host looks
+// like the rest of Valet rather than the browser's defaults.
+const STYLE = [
+  ':root { color-scheme: light dark; }',
+  'body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; box-sizing: border-box;',
+  '  font: 14px/1.5 system-ui, -apple-system, sans-serif; background: #ffffff; color: #171717; }',
+  'main { display: flex; flex-direction: column; gap: 1rem; width: 100%; max-width: 20rem; }',
+  'h1 { margin: 0; font-size: 1.125rem; font-weight: 500; }',
+  'p { margin: 0; color: #737373; overflow-wrap: anywhere; }',
+  'form { display: flex; }',
+  'button { font: inherit; padding: 0.375rem 0.75rem; border: 1px solid #d4d4d4; border-radius: 6px; background: #ffffff; color: inherit; cursor: pointer; }',
+  'button:hover { background: #f5f5f5; }',
+  '@media (prefers-color-scheme: dark) {',
+  '  body { background: #0a0a0a; color: #ededed; }',
+  '  p { color: #a1a1a1; }',
+  '  button { border-color: #3f3f3f; background: #1c1c1c; }',
+  '  button:hover { background: #262626; }',
+  '}',
+].join('\n')
+
 function page(title: string, body: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${body}</body></html>`
+  return (
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">` +
+    `<title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`
+  )
 }
 
 export function pausedPage(canWake: boolean): string {
