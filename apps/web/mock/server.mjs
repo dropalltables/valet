@@ -96,6 +96,7 @@ function thread(overrides) {
     agent: 'claude',
     model: 'opus',
     permissions: 'bypassPermissions',
+    accountId: 'a-claude-personal',
     status: 'idle',
     error: null,
     branch: 'valet/untitled-0000',
@@ -150,9 +151,15 @@ function publishServices(id) {
   if (t) broadcast(t.subscribers, { t: 'services', services: t.services })
 }
 
+const accounts = new Map([
+  ['a-claude-personal', { id: 'a-claude-personal', agent: 'claude', name: 'personal', label: 'sk-ant-oat…3f9a', method: 'oauth', createdAt: ago(60 * 24 * 3), updatedAt: ago(60 * 24 * 3) }],
+  ['a-claude-work', { id: 'a-claude-work', agent: 'claude', name: 'work', label: 'sk-ant-api…77c1', method: 'api-key', createdAt: ago(60 * 24), updatedAt: ago(60 * 24) }],
+])
+const accountsFor = (agent) => [...accounts.values()].filter((a) => a.agent === agent)
+const NOUNS = ['acorn', 'anchor', 'beacon', 'cedar', 'ember', 'harbor', 'heron', 'juniper', 'lantern', 'maple', 'otter', 'pebble', 'raven', 'river', 'summit', 'willow']
+const randomAccountName = () => `${NOUNS[Math.floor(Math.random() * NOUNS.length)]}-${NOUNS[Math.floor(Math.random() * NOUNS.length)]}-${1 + Math.floor(Math.random() * 10)}`
+
 const credentials = {
-  claude: { kind: 'claude', configured: true, label: 'sk-ant-oat…3f9a', method: 'oauth', updatedAt: ago(60 * 24 * 3) },
-  codex: { kind: 'codex', configured: false, label: null, method: null, updatedAt: null },
   github: { kind: 'github', configured: true, label: 'ghp_…a1b2 (octocat)', method: null, updatedAt: ago(60 * 24 * 9) },
   'github-app': { kind: 'github-app', configured: false, label: null, method: null, updatedAt: null },
 }
@@ -195,6 +202,7 @@ const settings = {
   defaultAgent: 'claude',
   defaultModel: { claude: 'opus', codex: 'gpt-6-astra' },
   defaultPermissions: { claude: 'bypassPermissions', codex: 'never' },
+  defaultAccount: {},
   allowProjectMcpJson: false,
 }
 
@@ -242,8 +250,8 @@ function agentsResponse() {
       return {
         id,
         label: id === 'claude' ? 'Claude Code' : 'Codex',
-        available: credentials[id].configured,
-        reason: credentials[id].configured ? null : 'Not configured',
+        available: accountsFor(id).length > 0,
+        reason: accountsFor(id).length > 0 ? null : 'No account configured',
         models: entry.models,
         defaultModel: entry.models[0].id,
         modelsSource: entry.source,
@@ -873,7 +881,7 @@ function usageResponse(range) {
   for (const t of threads.values()) {
     const { id, projectId, agent, model } = t.row
     for (const { event } of t.events) {
-      if (event.type === 'usage' && event.rateLimits) limits.set(agent, { rateLimits: event.rateLimits, observedAt: now() })
+      if (event.type === 'usage' && event.rateLimits) limits.set(`${agent}/${t.row.accountId ?? ''}`, { agent, accountId: t.row.accountId, rateLimits: event.rateLimits, observedAt: now() })
       if (event.type !== 'turn.end' || !event.usage) continue
       const at = Date.parse(event.at)
       if (since !== null && at < since) continue
@@ -915,8 +923,10 @@ function usageResponse(range) {
     byModel: [...byModel.values()].map(totals),
     bucket: 'day',
     daily,
-    rateLimits: [...limits].flatMap(([agent, { rateLimits, observedAt }]) =>
-      rateLimits.filter((l) => l.resetsAt === null || Date.parse(l.resetsAt) > Date.now()).map((l) => ({ ...l, agent, observedAt })),
+    rateLimits: [...limits.values()].flatMap(({ agent, accountId, rateLimits, observedAt }) =>
+      rateLimits
+        .filter((l) => l.resetsAt === null || Date.parse(l.resetsAt) > Date.now())
+        .map((l) => ({ ...l, agent, accountId, accountName: accounts.get(accountId)?.name ?? null, observedAt })),
     ),
   }
 }
@@ -961,7 +971,7 @@ async function handle(req, res) {
     for (const id of only ? [only] : ['claude', 'codex']) {
       const entry = modelCatalog.get(id)
       if (!entry) continue
-      if (!credentials[id].configured) modelCatalog.set(id, { ...entry, error: 'Not configured' })
+      if (accountsFor(id).length === 0) modelCatalog.set(id, { ...entry, error: 'No account configured' })
       else modelCatalog.set(id, { models: MODELS[id], source: 'cli', refreshedAt: now(), error: null })
     }
     return send(res, 200, agentsResponse())
@@ -1004,21 +1014,51 @@ async function handle(req, res) {
   }
 
   if (path === '/api/credentials') return send(res, 200, Object.values(credentials))
-  if (path === '/api/credentials/codex/device-login' && method === 'POST') {
-    const login = { id: randomUUID(), status: 'pending', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'HXKT-92QF', error: null, polls: 0 }
-    deviceLogins.set(login.id, login)
-    return send(res, 200, { ...login, polls: undefined })
+  if (path === '/api/accounts' && method === 'GET') return send(res, 200, { accounts: [...accounts.values()] })
+  if (path === '/api/accounts' && method === 'POST') {
+    const body = await readJson(req)
+    const secret = body.token ?? body.apiKey ?? ''
+    if (!secret) return fail(res, 400, 'Missing token')
+    const name = body.name?.trim() || randomAccountName()
+    if (accountsFor(body.agent).some((a) => a.name === name)) return fail(res, 409, `${body.agent} already has an account named ${name}`)
+    const id = `a-${randomUUID().slice(0, 8)}`
+    const account = { id, agent: body.agent, name, label: mask(secret), method: secret.startsWith('sk-ant-oat') ? 'oauth' : 'api-key', createdAt: now(), updatedAt: now() }
+    accounts.set(id, account)
+    refreshModelsInBackground(body.agent)
+    return send(res, 201, account)
   }
-  if (seg[0] === 'api' && seg[1] === 'credentials' && seg[2] === 'codex' && seg[3] === 'device-login' && seg[4]) {
+  if (path === '/api/accounts/codex/device-login' && method === 'POST') {
+    const body = await readJson(req)
+    const login = { id: randomUUID(), name: body.name?.trim() || randomAccountName(), status: 'pending', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'HXKT-92QF', error: null, polls: 0 }
+    deviceLogins.set(login.id, login)
+    return send(res, 200, { ...login, polls: undefined, name: undefined })
+  }
+  if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] === 'codex' && seg[3] === 'device-login' && seg[4]) {
     const login = deviceLogins.get(seg[4])
     if (!login) return fail(res, 404, 'Not found')
     login.polls += 1
     if (login.polls >= 3 && login.status === 'pending') {
       login.status = 'complete'
-      Object.assign(credentials.codex, { configured: true, label: 'ChatGPT (octocat@example.com)', method: 'oauth', updatedAt: now() })
+      const id = `a-${randomUUID().slice(0, 8)}`
+      accounts.set(id, { id, agent: 'codex', name: login.name, label: 'ChatGPT (octocat@example.com)', method: 'oauth', createdAt: now(), updatedAt: now() })
       refreshModelsInBackground('codex')
     }
-    return send(res, 200, { ...login, polls: undefined })
+    return send(res, 200, { ...login, polls: undefined, name: undefined })
+  }
+  if (seg[0] === 'api' && seg[1] === 'accounts' && seg[2] && !seg[3]) {
+    const account = accounts.get(seg[2])
+    if (!account) return fail(res, 404, 'Not found')
+    if (method === 'PATCH') {
+      const body = await readJson(req)
+      if (accountsFor(account.agent).some((a) => a.id !== account.id && a.name === body.name?.trim())) return fail(res, 409, 'An account with that name exists')
+      Object.assign(account, { name: body.name.trim(), updatedAt: now() })
+      return send(res, 200, account)
+    }
+    if (method === 'DELETE') {
+      accounts.delete(account.id)
+      for (const t of threads.values()) if (t.row.accountId === account.id) touch(t.row.id, { accountId: null })
+      return send(res, 204)
+    }
   }
   if (path === '/api/credentials/github/repos') {
     if (!credentials.github.configured) return fail(res, 400, 'GitHub is not configured')
@@ -1192,6 +1232,7 @@ async function handle(req, res) {
           agent: body.agent,
           model: body.model,
           permissions: body.permissions ?? 'bypassPermissions',
+          accountId: body.accountId ?? settings.defaultAccount[body.agent] ?? accountsFor(body.agent)[0]?.id ?? null,
           status: 'provisioning',
           branch: `valet/${slug}-${randomUUID().slice(0, 4)}`,
           baseBranch: body.baseBranch ?? project.defaultBranch,
@@ -1218,7 +1259,12 @@ async function handle(req, res) {
     if (!action) {
       if (method === 'PATCH') {
         const body = await readJson(req)
-        touch(id, { title: body.title ?? t.row.title })
+        if (body.accountId !== undefined) {
+          const account = accounts.get(body.accountId)
+          if (!account || account.agent !== t.row.agent) return fail(res, 400, `${body.accountId} is not a ${t.row.agent} account`)
+          if (t.row.status === 'running') return fail(res, 409, 'A turn is running; wait for it to finish or stop it first')
+        }
+        touch(id, { title: body.title ?? t.row.title, accountId: body.accountId ?? t.row.accountId })
         return send(res, 200, listItem(t.row))
       }
       if (method === 'DELETE') {

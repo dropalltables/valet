@@ -11,7 +11,7 @@ import type {
   UsageTotals,
 } from '@valet/shared'
 import type { Db } from '../db/index.js'
-import { projects, threadEvents, threads } from '../db/schema.js'
+import { accounts, projects, threadEvents, threads } from '../db/schema.js'
 
 const DAY_MS = 86_400_000
 const WEEK_MS = 7 * DAY_MS
@@ -164,20 +164,23 @@ export class UsageService {
    */
   private async rateLimits(now: Date): Promise<UsageRateLimit[]> {
     const rows = await this.db
-      .selectDistinctOn([threads.agent], {
+      .selectDistinctOn([threads.agent, threads.accountId], {
         agent: threads.agent,
+        accountId: threads.accountId,
+        accountName: accounts.name,
         limits: sql<RateLimitInfo[]>`${threadEvents.payload}->'rateLimits'`,
         observedAt: threadEvents.createdAt,
       })
       .from(threadEvents)
       .innerJoin(threads, eq(threads.id, threadEvents.threadId))
+      .leftJoin(accounts, eq(accounts.id, threads.accountId))
       .where(and(eq(threadEvents.type, 'usage'), sql`${threadEvents.payload}->'rateLimits' <> 'null'::jsonb`))
-      .orderBy(threads.agent, desc(threadEvents.id))
+      .orderBy(threads.agent, threads.accountId, desc(threadEvents.id))
 
     return rows.flatMap((row) =>
       row.limits
         .filter((limit) => limit.resetsAt === null || Date.parse(limit.resetsAt) > now.getTime())
-        .map((limit) => ({ ...limit, agent: row.agent, observedAt: row.observedAt.toISOString() })),
+        .map((limit) => ({ ...limit, agent: row.agent, accountId: row.accountId, accountName: row.accountName ?? null, observedAt: row.observedAt.toISOString() })),
     )
   }
 }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { ACCOUNT_NAME_RE } from '@valet/shared'
 import crypto from 'node:crypto'
 import { test } from 'node:test'
 import zlib from 'node:zlib'
@@ -10,6 +11,7 @@ import { parseSize } from '../src/config.js'
 import { parseDeviceLoginOutput } from '../src/credentials/device-login.js'
 import { maskToken } from '../src/credentials/store.js'
 import { Cipher, timingSafeEqualStrings } from '../src/crypto.js'
+import { ACCOUNT_NOUNS, randomAccountName } from '../src/credentials/names.js'
 import { diedOfMemory, isLocallyBuilt, reposVolumeName, soleNetworkName, toUsage } from '../src/docker/client.js'
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
 import { servicesReplySchema } from '@valet/shared'
@@ -359,4 +361,14 @@ test('services from a supervisor without the review flag still parse', () => {
     updatedAt: '2026-09-07T00:00:00.000Z',
   }
   assert.equal(servicesReplySchema.parse({ services: [legacy] }).services[0]?.review, true)
+})
+
+test('randomAccountName is noun-noun-number, within the name rules', () => {
+  assert.equal(randomAccountName(() => 0), `${ACCOUNT_NOUNS[0]}-${ACCOUNT_NOUNS[0]}-1`)
+  assert.equal(randomAccountName(() => 0.999), `${ACCOUNT_NOUNS[ACCOUNT_NOUNS.length - 1]}-${ACCOUNT_NOUNS[ACCOUNT_NOUNS.length - 1]}-10`)
+  for (let i = 0; i < 200; i++) {
+    const name = randomAccountName()
+    assert.match(name, /^[a-z]+-[a-z]+-(?:[1-9]|10)$/)
+    assert.match(name, ACCOUNT_NAME_RE)
+  }
 })

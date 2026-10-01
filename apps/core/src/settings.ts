@@ -24,6 +24,7 @@ export const updateSettingsSchema = z
     defaultAgent: z.enum(['claude', 'codex']),
     defaultModel: z.object({ claude: z.string().min(1), codex: z.string().min(1) }).partial(),
     defaultPermissions: z.object({ claude: permissionMode('claude'), codex: permissionMode('codex') }).partial(),
+    defaultAccount: z.object({ claude: z.string().min(1).nullable(), codex: z.string().min(1).nullable() }).partial(),
     allowProjectMcpJson: z.boolean(),
   })
   .partial()
@@ -43,6 +44,7 @@ export class SettingsService {
       defaultAgent: 'claude',
       defaultModel: { ...DEFAULT_MODEL },
       defaultPermissions: { ...DEFAULT_PERMISSIONS },
+      defaultAccount: {},
       allowProjectMcpJson: false,
     }
   }
@@ -51,13 +53,12 @@ export class SettingsService {
     const [row] = await this.db.select().from(settings).where(eq(settings.id, ROW_ID))
     const base = this.defaults()
     const stored = row?.data ?? {}
-    // Before per-agent modes this was one string ('auto' | 'ask'); the migration rewrote it.
-    const storedPermissions = typeof stored.defaultPermissions === 'object' ? stored.defaultPermissions : {}
     return {
       ...base,
       ...stored,
       defaultModel: { ...base.defaultModel, ...(stored.defaultModel ?? {}) },
-      defaultPermissions: { ...base.defaultPermissions, ...storedPermissions },
+      defaultPermissions: { ...base.defaultPermissions, ...(stored.defaultPermissions ?? {}) },
+      defaultAccount: { ...(stored.defaultAccount ?? {}) },
     }
   }
 
@@ -71,10 +72,18 @@ export class SettingsService {
     for (const [agent, mode] of Object.entries(patch.defaultPermissions ?? {})) {
       if (mode !== undefined) defaultPermissions[agent as keyof typeof defaultPermissions] = mode
     }
+    // Null clears the agent's default; the oldest account then applies.
+    const defaultAccount: Settings['defaultAccount'] = { ...current.defaultAccount }
+    for (const [agent, id] of Object.entries(patch.defaultAccount ?? {})) {
+      if (id === undefined) continue
+      if (id === null) delete defaultAccount[agent as keyof typeof defaultAccount]
+      else defaultAccount[agent as keyof typeof defaultAccount] = id
+    }
     const next: Settings = {
       idlePauseMinutes: patch.idlePauseMinutes ?? current.idlePauseMinutes,
       defaultAgent: patch.defaultAgent ?? current.defaultAgent,
       defaultPermissions,
+      defaultAccount,
       allowProjectMcpJson: patch.allowProjectMcpJson ?? current.allowProjectMcpJson,
       defaultModel,
     }

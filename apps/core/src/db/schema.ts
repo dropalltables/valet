@@ -108,6 +108,7 @@ export const threads = pgTable(
     agent: text('agent').$type<AgentKind>().notNull(),
     model: text('model').notNull(),
     permissions: text('permissions').$type<PermissionMode>().notNull(),
+    accountId: text('account_id').references(() => accounts.id, { onDelete: 'set null' }),
     status: text('status').$type<ThreadStatus>().notNull(),
     error: text('error'),
     branch: text('branch').notNull(),
@@ -158,6 +159,7 @@ export const threadEvents = pgTable(
   ],
 )
 
+/** GitHub credentials: one row per kind. */
 export const credentials = pgTable('credentials', {
   kind: text('kind').$type<CredentialKind>().primaryKey(),
   payloadEnc: text('payload_enc').notNull(),
@@ -165,6 +167,22 @@ export const credentials = pgTable('credentials', {
   method: text('method').$type<'oauth' | 'api-key'>(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+/** Named credentials for the agent CLIs; a thread runs under exactly one. */
+export const accounts = pgTable(
+  'accounts',
+  {
+    id: text('id').primaryKey(),
+    agent: text('agent').$type<AgentKind>().notNull(),
+    name: text('name').notNull(),
+    payloadEnc: text('payload_enc').notNull(),
+    label: text('label'),
+    method: text('method').$type<'oauth' | 'api-key'>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('accounts_agent_name_idx').on(t.agent, t.name)],
+)
 
 export const settings = pgTable('settings', {
   id: text('id').primaryKey(),
@@ -233,6 +251,7 @@ export type ProjectRow = typeof projects.$inferSelect
 export type ThreadRow = typeof threads.$inferSelect
 export type ThreadEventRow = typeof threadEvents.$inferSelect
 export type CredentialRow = typeof credentials.$inferSelect
+export type AccountRow = typeof accounts.$inferSelect
 export type DeviceLoginRow = typeof deviceLogins.$inferSelect
 export type ModelCatalogRow = typeof modelCatalog.$inferSelect
 export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect

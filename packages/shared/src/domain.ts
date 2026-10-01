@@ -228,6 +228,8 @@ export type Thread = {
   agent: AgentKind
   model: string
   permissions: PermissionMode
+  /** The `AgentAccount` the agent runs under; null once that account was removed. */
+  accountId: string | null
   status: ThreadStatus
   /** Human-readable reason when `status === 'error'`. */
   error: string | null
@@ -405,10 +407,6 @@ export function imageMediaType(path: string): string | null {
  * only ever reports whether one exists plus a masked hint.
  */
 export type CredentialKind =
-  /** `claude setup-token` output (`sk-ant-oat…`) or an Anthropic API key (`sk-ant-api…`). */
-  | 'claude'
-  /** Codex `auth.json` captured from a device-code login, or an OpenAI API key. */
-  | 'codex'
   /** GitHub personal access token used for clone, push, and pull requests. */
   | 'github'
   /** GitHub App: id, private key, and webhook secret. Preferred over the token when set. */
@@ -417,11 +415,33 @@ export type CredentialKind =
 export type CredentialStatus = {
   kind: CredentialKind
   configured: boolean
-  /** e.g. `sk-ant-oat…3f9a`, `ChatGPT (you@example.com)`, `ghp_…a1b2`, `App 123456`. */
+  /** e.g. `ghp_…a1b2 (octocat)`, `App 123456 (acme)`. */
   label: string | null
-  /** For `claude`/`codex`: `oauth` (subscription) or `api-key`. */
-  method: 'oauth' | 'api-key' | null
+  method: null
   updatedAt: string | null
+}
+
+export const ACCOUNT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/
+
+/**
+ * One credential for an agent CLI, named by the user (`personal`, `work`). An agent
+ * can have several; every thread runs under exactly one, chosen when it is created
+ * and switchable while no turn is running.
+ *
+ * `claude`: `claude setup-token` output (`sk-ant-oat…`) or an Anthropic API key.
+ * `codex`: `auth.json` from a device-code login, or an OpenAI API key.
+ */
+export type AgentAccount = {
+  id: string
+  agent: AgentKind
+  /** `ACCOUNT_NAME_RE`; unique per agent. Generated as `<noun>-<noun>-<1..10>` when none was given. */
+  name: string
+  /** e.g. `sk-ant-oat…3f9a`, `ChatGPT (you@example.com)`. */
+  label: string | null
+  /** `oauth` (subscription) or `api-key`. */
+  method: 'oauth' | 'api-key'
+  createdAt: string
+  updatedAt: string
 }
 
 /** Device-code login for Codex (`codex login --device-auth`) run inside a helper sandbox. */
@@ -462,6 +482,8 @@ export type Settings = {
   defaultAgent: AgentKind
   defaultModel: Record<AgentKind, string>
   defaultPermissions: Record<AgentKind, PermissionMode>
+  /** Account new threads run under, per agent; unset means the agent's oldest account. */
+  defaultAccount: Partial<Record<AgentKind, string>>
   /**
    * Whether the servers a repository declares in its own `.mcp.json` are merged
    * into the config Valet writes. Off by default: they start processes in the

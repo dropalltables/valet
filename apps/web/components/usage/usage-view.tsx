@@ -266,6 +266,7 @@ function RateLimits({ limits }: { limits: UsageResponse['rateLimits'] }) {
         <TableHeader>
           <TableRow>
             <TableHead>Agent</TableHead>
+            <TableHead>Account</TableHead>
             <TableHead>Window</TableHead>
             <TableHead className="text-right">Utilization</TableHead>
             <TableHead className="text-right">Resets</TableHead>
@@ -276,8 +277,9 @@ function RateLimits({ limits }: { limits: UsageResponse['rateLimits'] }) {
           {limits.map((limit) => {
             const percent = Math.round(limit.utilization * 100)
             return (
-              <TableRow key={`${limit.agent}/${limit.window}`}>
+              <TableRow key={`${limit.agent}/${limit.accountId ?? ''}/${limit.window}`}>
                 <TableCell className="font-medium">{AGENT_LABELS[limit.agent]}</TableCell>
+                <TableCell>{limit.accountName ?? '—'}</TableCell>
                 <TableCell>{WINDOW_LABELS[limit.window] ?? limit.window}</TableCell>
                 <TableCell>
                   <div className="flex items-center justify-end gap-2">

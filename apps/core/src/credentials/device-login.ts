@@ -9,6 +9,7 @@ import { waitForSupervisor } from '../docker/supervisor-client.js'
 import { HttpError } from '../errors.js'
 import { newId } from '../ids.js'
 import { errorMessage, logger } from '../logger.js'
+import { randomAccountName } from './names.js'
 import { emailFromIdToken, type CodexAuthJson, type CredentialStore } from './store.js'
 
 const log = logger('device-login')
@@ -69,7 +70,12 @@ export class DeviceLoginManager {
     await this.db.update(deviceLogins).set({ ...patch, updatedAt: new Date() }).where(eq(deviceLogins.id, id))
   }
 
-  async start(): Promise<DeviceLogin> {
+  /** The account is created when the login completes; a name already in use fails here, before the browser step. */
+  async start(requestedName: string | null): Promise<DeviceLogin> {
+    const accountName = requestedName ?? randomAccountName()
+    if ((await this.store.accounts('codex')).some((a) => a.name === accountName)) {
+      throw new HttpError(409, `Codex already has an account named ${accountName}`)
+    }
     const id = newId()
     const token = randomHex(32)
     const name = `valet-login-${id}`
@@ -151,7 +157,7 @@ export class DeviceLoginManager {
         }
         const authJson = JSON.parse(raw.toString('utf8')) as CodexAuthJson
         const email = emailFromIdToken(authJson.tokens?.id_token)
-        await this.store.put('codex', { authJson }, email ? `ChatGPT (${email})` : 'ChatGPT', 'oauth')
+        await this.store.addAccount('codex', accountName, { authJson }, email ? `ChatGPT (${email})` : 'ChatGPT', 'oauth')
         await this.update(id, { status: 'complete' })
         this.onStored()
       }

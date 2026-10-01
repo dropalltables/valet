@@ -27,10 +27,15 @@ docker compose up -d --build
 
 Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup under Settings:
 
-1. **Claude Code**: run `claude setup-token` on your own machine and paste the token.
-   Anthropic's terms do not allow Valet to broker the login for you; the token is
-   yours and stays encrypted in Valet's database.
+1. **Claude Code**: run `claude setup-token` on your own machine and add the token as an
+   account. Name it however you tell them apart, or leave the name empty for a generated
+   one like `otter-harbor-4`. Anthropic's terms do not allow Valet to broker the login
+   for you; the token is yours and stays encrypted in Valet's database.
 2. **Codex**: click *Sign in with ChatGPT* (device code flow) or paste an OpenAI API key.
+
+   Each agent can have several accounts. A thread runs under one, picked when it is
+   created (Settings holds the default), and the thread header switches it between
+   turns, for when one subscription's quota runs out. Nothing switches on its own.
 3. **GitHub**: paste a personal access token with `repo` scope.
 4. **GitHub App** (optional): paste the App ID, private key, and webhook secret of a
    GitHub App you own. Clone, push, and pull requests then use its installation tokens
@@ -40,8 +45,8 @@ Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup unde
    subscribe it to `check_run`, `check_suite`, `workflow_run`, `pull_request`,
    `issue_comment`, and `pull_request_review_comment`.
 
-Saving a Claude Code or Codex credential reads that agent's model list from its CLI
-(in a short-lived sandbox container); *Refresh* under the credential reads it again.
+Adding a Claude Code or Codex account reads that agent's model list from its CLI
+(in a short-lived sandbox container); *Refresh* under the agent reads it again.
 
 To serve Valet on a domain, put a reverse proxy (Caddy, Traefik, nginx) in front of
 port 3000 and set `VALET_BASE_URL`. WebSockets must be proxied. Portals (below) are

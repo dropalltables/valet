@@ -330,10 +330,11 @@ export async function readCodexAuth(supervisor: SupervisorClient): Promise<Codex
  * Codex rewrites auth.json when it refreshes its tokens, and a rotated refresh
  * token invalidates the stored one; whatever ran codex must copy the result back.
  */
-export async function syncCodexAuth(supervisor: SupervisorClient, credentials: CredentialStore): Promise<void> {
-  const auth = await credentials.codexAuth()
+export async function syncCodexAuth(supervisor: SupervisorClient, credentials: CredentialStore, accountId: string | null): Promise<void> {
+  if (!accountId) return
+  const auth = await credentials.codexAuthFor(accountId)
   if (auth?.mode !== 'oauth') return
   const current = await readCodexAuth(supervisor)
   if (!current?.tokens || !current.last_refresh || current.last_refresh === auth.authJson.last_refresh) return
-  await credentials.put('codex', { authJson: current }, auth.label, 'oauth')
+  await credentials.updateAccountPayload<'codex'>(accountId, { authJson: current })
 }

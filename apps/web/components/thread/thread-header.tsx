@@ -7,6 +7,7 @@ import { AGENT_LABELS, CI_FIX_MAX_ATTEMPTS, formatBytes, permissionLabel, type P
 import { MoreHorizontalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
+import { useAccounts } from '@/lib/hooks'
 import { usd } from '@/lib/format'
 import {
   AlertDialog,
@@ -22,6 +23,7 @@ import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { StatusWord } from '@/components/app/status'
 import { useAppData } from '@/components/app/data-provider'
@@ -133,6 +135,7 @@ export function ThreadHeader({ thread, project, costUsd, usage, actions, service
           {AGENT_LABELS[thread.agent]} {thread.model}
         </span>
         <span>{permissionLabel(thread.agent, thread.permissions)}</span>
+        <AccountSwitch thread={thread} />
         {cost && <span className="tabular-nums">{cost}</span>}
         {thread.mcpServers > 0 && <span className="tabular-nums">{thread.mcpServers} MCP</span>}
         {usage && (
@@ -166,6 +169,48 @@ export function ThreadHeader({ thread, project, costUsd, usage, actions, service
         </AlertDialogContent>
       </AlertDialog>
     </header>
+  )
+}
+
+/**
+ * Which of the agent's accounts the next turn runs under. A thread with one choice
+ * shows the name; one without a usable account, or with several, gets a picker.
+ * Core refuses the switch while a turn is running.
+ */
+function AccountSwitch({ thread }: { thread: ThreadListItem }) {
+  const { upsertThread } = useAppData()
+  const { data } = useAccounts()
+  const [busy, setBusy] = useState(false)
+  const accounts = (data?.accounts ?? []).filter((a) => a.agent === thread.agent)
+  const current = accounts.find((a) => a.id === thread.accountId) ?? null
+  if (!data) return null
+  if (current && accounts.length === 1) return <span>{current.name}</span>
+  if (!current && accounts.length === 0) return <span className="text-destructive">No account</span>
+
+  async function switchTo(accountId: string): Promise<void> {
+    setBusy(true)
+    try {
+      upsertThread(await api.threads.update(thread.id, { accountId }))
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Select value={current?.id ?? ''} onValueChange={(v) => void switchTo(v)} disabled={busy || thread.status === 'running'}>
+      <SelectTrigger size="sm" aria-label="Account" className="h-6 gap-1 px-1.5 text-xs">
+        <SelectValue placeholder="Pick an account" />
+      </SelectTrigger>
+      <SelectContent>
+        {accounts.map((a) => (
+          <SelectItem key={a.id} value={a.id}>
+            {a.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 }
 

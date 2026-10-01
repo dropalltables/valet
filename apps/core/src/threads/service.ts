@@ -1,5 +1,7 @@
 import { and, asc, desc, eq, inArray, lt, ne, notInArray, sql } from 'drizzle-orm'
 import {
+  AGENT_LABELS,
+  type AgentKind,
   CI_FIX_MAX_ATTEMPTS,
   MESSAGEABLE_STATUSES,
   PORTAL_ENV,
@@ -323,6 +325,7 @@ export class ThreadService {
     const prompt = req.prompt.trim()
     if (!prompt) throw badRequest('prompt is required')
     const settings = await this.settings.get()
+    const accountId = await this.resolveAccount(req.agent, req.accountId ?? settings.defaultAccount[req.agent] ?? null)
     const id = newId()
     // The title, the branch name and the stored prompt are all shown or pushed outside
     // the transcript, so what the event log redacts has to be redacted here too. The
@@ -337,6 +340,7 @@ export class ThreadService {
         agent: req.agent,
         model: req.model,
         permissions: req.permissions ?? settings.defaultPermissions[req.agent],
+        accountId,
         status: 'provisioning',
         error: null,
         branch: `valet/${slugify(stored)}-${shortHex()}`,
@@ -357,7 +361,7 @@ export class ThreadService {
     return toThread(row)
   }
 
-  async update(id: string, patch: { title?: string; autoFixCi?: boolean }): Promise<Thread> {
+  async update(id: string, patch: { title?: string; autoFixCi?: boolean; accountId?: string }): Promise<Thread> {
     const set: Partial<ThreadRow> = {}
     if (patch.title !== undefined) {
       if (!patch.title.trim()) throw badRequest('title must not be empty')
@@ -368,8 +372,38 @@ export class ThreadService {
       if (!current.pr) throw badRequest('thread has no pull request')
       set.pr = { ...current.pr, autoFixCi: patch.autoFixCi }
     }
+    if (patch.accountId !== undefined) await this.switchAccount(id, patch.accountId)
     const row = Object.keys(set).length > 0 ? await this.patch(id, set) : await this.row(id)
     return toThread(row)
+  }
+
+  /**
+   * The next turn runs under `accountId`. The agent process is stopped so it relaunches
+   * with the new credential and resumes the session; a running turn is never cut.
+   */
+  private async switchAccount(id: string, accountId: string): Promise<void> {
+    await this.withLock(id, async () => {
+      const row = await this.row(id)
+      if (row.accountId === accountId) return
+      await this.resolveAccount(row.agent, accountId)
+      const live = this.liveFor(id)
+      if (live.currentTurnId !== null || live.adapter?.busy) throw conflict('A turn is running; wait for it to finish or stop it first')
+      await this.stopAdapter(live)
+      await this.patch(id, { accountId })
+      this.events.publishThread(await this.listItem(await this.row(id)))
+    })
+  }
+
+  /** The account a thread of `agent` runs under: the one asked for, else the agent's oldest. */
+  private async resolveAccount(agent: AgentKind, accountId: string | null): Promise<string> {
+    if (accountId) {
+      const account = await this.credentials.account(accountId)
+      if (!account || account.agent !== agent) throw badRequest(`${accountId} is not a ${AGENT_LABELS[agent]} account`)
+      return account.id
+    }
+    const first = await this.credentials.firstAccount(agent)
+    if (!first) throw badRequest(`No ${AGENT_LABELS[agent]} account is configured. Add one in Settings.`)
+    return first.id
   }
 
   async delete(id: string): Promise<void> {
@@ -737,16 +771,17 @@ export class ThreadService {
 
     let adapter: Adapter
     let mcpConfigPath: string | null = null
+    if (!row.accountId) throw new Error(`The account this thread ran under was removed. Pick another ${AGENT_LABELS[row.agent]} account.`)
     if (row.agent === 'claude') {
-      const cred = await this.credentials.claudeEnv()
-      if (!cred) throw new Error('No Claude Code credential is configured. Add one in Settings.')
+      const cred = await this.credentials.claudeEnvFor(row.accountId)
+      if (!cred) throw new Error('The account this thread ran under was removed. Pick another Claude Code account.')
       Object.assign(env, cred, { CLAUDE_CONFIG_DIR: SANDBOX.claudeConfigDir })
       const { allowProjectMcpJson } = await this.settings.get()
       mcpConfigPath = await writeClaudeMcpConfig(sandbox.supervisor, mcpServers, allowProjectMcpJson, this.sink(row.id))
       adapter = new ClaudeAdapter()
     } else {
-      const auth = await this.credentials.codexAuth()
-      if (!auth) throw new Error('No Codex credential is configured. Add one in Settings.')
+      const auth = await this.credentials.codexAuthFor(row.accountId)
+      if (!auth) throw new Error('The account this thread ran under was removed. Pick another Codex account.')
       env.CODEX_HOME = SANDBOX.codexHome
       if (auth.mode === 'api-key') {
         env.CODEX_API_KEY = auth.apiKey
@@ -847,7 +882,7 @@ export class ThreadService {
 
     const supervisor = live.sandbox?.supervisor
     if (supervisor) {
-      if (row.agent === 'codex') await syncCodexAuth(supervisor, this.credentials).catch((err) => log.warn('codex auth sync failed', { id, err }))
+      if (row.agent === 'codex') await syncCodexAuth(supervisor, this.credentials, row.accountId).catch((err) => log.warn('codex auth sync failed', { id, err }))
       const changes = await this.refreshDiffStats(id, supervisor, row.baseBranch)
       if (changes) await this.autoCreatePr(live, changes)
     }

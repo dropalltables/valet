@@ -16,6 +16,7 @@
  */
 
 import type {
+  AgentAccount,
   AgentKind,
   ChangedFile,
   CredentialKind,
@@ -69,8 +70,6 @@ export type CredentialsResponse = CredentialStatus[]
 
 /**
  * PUT /api/credentials/:kind
- *  claude:     { token }  where token is `sk-ant-oat…` (setup-token) or `sk-ant-api…`
- *  codex:      { apiKey } for API-key auth (device login is a separate flow below)
  *  github:     { token }  personal access token with `repo` scope (classic) or
  *              Contents+Pull requests+Metadata read/write (fine-grained)
  *  github-app: { appId, privateKey, webhookSecret } from the GitHub App's settings page
@@ -79,11 +78,28 @@ export type CredentialsResponse = CredentialStatus[]
  */
 export type PutCredentialRequest = {
   token?: string
-  apiKey?: string
   appId?: number
   privateKey?: string
   webhookSecret?: string
 }
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+/**
+ * GET    /api/accounts -> AccountsResponse
+ * POST   /api/accounts -> AgentAccount (409 when the agent already has that name; a missing
+ *        name is generated as <noun>-<noun>-<1..10>)
+ *   claude: { agent, name, token }  token is `sk-ant-oat…` (setup-token) or `sk-ant-api…`
+ *   codex:  { agent, name, apiKey } for API-key auth; device login is the flow below
+ * PATCH  /api/accounts/:id { name } -> AgentAccount
+ * DELETE /api/accounts/:id -> 204; threads that ran under it keep their history and
+ *        need another account picked before their next turn.
+ */
+export type AccountsResponse = { accounts: AgentAccount[] }
+export type CreateAccountRequest = { agent: AgentKind; name?: string; token?: string; apiKey?: string }
+export type UpdateAccountRequest = { name: string }
 
 /**
  * GET /api/credentials/github/app -> where the App's webhook must point and which
@@ -103,12 +119,14 @@ export type GitHubAppResponse = {
 }
 
 /**
- * POST /api/credentials/codex/device-login -> DeviceLogin (status pending)
- * GET  /api/credentials/codex/device-login/:id -> DeviceLogin
+ * POST /api/accounts/codex/device-login { name? } -> DeviceLogin (status pending); the account is created on completion
+ * GET  /api/accounts/codex/device-login/:id -> DeviceLogin
  * Core runs `codex login --device-auth` in a helper sandbox, parses the URL and
  * code, and stores the resulting auth.json when it completes.
  */
 export type DeviceLoginResponse = DeviceLogin
+/** A missing name is generated like `CreateAccountRequest`. */
+export type StartDeviceLoginRequest = { name?: string }
 
 /** GET /api/credentials/github/repos?query= -> repos the token can see, most recently pushed first */
 export type GitHubRepo = {
@@ -135,7 +153,7 @@ export type ModelsSource = 'cli' | 'api' | 'default'
 export type AgentInfo = {
   id: AgentKind
   label: string
-  /** False when no credential is configured. */
+  /** False when the agent has no account. */
   available: boolean
   reason: string | null
   models: ModelOption[]
@@ -274,12 +292,15 @@ export type CreateThreadRequest = {
   agent: AgentKind
   model: string
   permissions?: PermissionMode
+  /** Defaults to the settings default for the agent, else its oldest account. */
+  accountId?: string
   /** Defaults to the project's default branch. */
   baseBranch?: string
 }
 
 /** GET /api/threads/:id -> ThreadListItem ; PATCH { title?, autoFixCi? } ; DELETE -> 204 (removes container and volume) */
-export type UpdateThreadRequest = { title?: string; autoFixCi?: boolean }
+/** `accountId` switches the account the next turn runs under; 409 while a turn is running. */
+export type UpdateThreadRequest = { title?: string; autoFixCi?: boolean; accountId?: string }
 
 /**
  * POST /api/threads/:id/messages -> { turnId }
@@ -525,8 +546,8 @@ export type UsageByModel = UsageTotals & { agent: AgentKind; model: string }
 export type UsageBucket = 'day' | 'week'
 /** `day` is `YYYY-MM-DD` in UTC: the day, or the Monday of the week when the bucket is `week`. Buckets without turns are present with zeros. */
 export type UsageDay = UsageTotals & { day: string }
-/** The most recent rate-limit window an agent reported, across all of its threads; windows past their reset are dropped. */
-export type UsageRateLimit = RateLimitInfo & { agent: AgentKind; observedAt: string }
+/** The most recent rate-limit window an account reported, across its threads; windows past their reset are dropped. */
+export type UsageRateLimit = RateLimitInfo & { agent: AgentKind; accountId: string | null; accountName: string | null; observedAt: string }
 
 /**
  * GET /api/usage?range=7d|30d|all

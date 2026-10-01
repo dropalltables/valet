@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit'
 import { sql } from 'drizzle-orm'
 import { z } from 'zod'
 import {
+  ACCOUNT_NAME_RE,
   AGENT_LABELS,
   DEFAULT_MODEL,
   isPermissionMode,
@@ -11,6 +12,8 @@ import {
   createServiceRequestSchema,
   serviceNameSchema,
   type AgentInfo,
+  type AccountsResponse,
+  type AgentAccount,
   type AgentKind,
   type AgentsResponse,
   type CredentialKind,
@@ -82,7 +85,7 @@ export type AppDeps = {
 
 const imageSchema = z.object({ mediaType: z.string(), dataUrl: z.string() })
 const agentKind = z.enum(['claude', 'codex'])
-const credentialKind = z.enum(['claude', 'codex', 'github', 'github-app'])
+const credentialKind = z.enum(['github', 'github-app'])
 
 const createProjectSchema = z.discriminatedUnion('source', [
   z.object({
@@ -111,9 +114,10 @@ const createThreadSchema = z.object({
   agent: agentKind,
   model: z.string().min(1),
   permissions: z.string().min(1).optional(),
+  accountId: z.string().min(1).optional(),
   baseBranch: z.string().optional(),
 })
-const updateThreadSchema = z.object({ title: z.string().optional(), autoFixCi: z.boolean().optional() })
+const updateThreadSchema = z.object({ title: z.string().optional(), autoFixCi: z.boolean().optional(), accountId: z.string().min(1).optional() })
 const sendMessageSchema = z.object({
   text: z.string(),
   images: z.array(imageSchema).optional(),
@@ -135,9 +139,12 @@ const mcpServerSchema = z.intersection(
     z.object({ type: z.literal('stdio'), command: z.string().min(1), args: z.array(z.string()).optional(), env: mcpValuesSchema }),
   ]),
 )
+const accountName = z.string().trim().regex(ACCOUNT_NAME_RE, 'letters, digits, spaces, dots, dashes and underscores; 40 characters at most')
+const createAccountSchema = z.object({ agent: agentKind, name: accountName.optional(), token: z.string().optional(), apiKey: z.string().optional() })
+const updateAccountSchema = z.object({ name: accountName })
+const startDeviceLoginSchema = z.object({ name: accountName.optional() })
 const putCredentialSchema = z.object({
   token: z.string().optional(),
-  apiKey: z.string().optional(),
   appId: z.number().int().positive().optional(),
   privateKey: z.string().optional(),
   webhookSecret: z.string().optional(),
@@ -272,17 +279,17 @@ export function createApp(deps: AppDeps): Hono {
   // ---- agents ----------------------------------------------------------------------
 
   const agentsResponse = async (): Promise<AgentsResponse> => {
-    const [creds, settings, catalog] = await Promise.all([deps.credentials.list(), deps.settings.get(), deps.catalog.all()])
+    const [accounts, settings, catalog] = await Promise.all([deps.credentials.accounts(), deps.settings.get(), deps.catalog.all()])
     const agents: AgentInfo[] = (['claude', 'codex'] as AgentKind[]).map((id) => {
-      const cred = creds.find((s) => s.kind === id)
+      const configured = accounts.some((a) => a.agent === id)
       const entry = catalog[id]
       const preferred = settings.defaultModel[id] ?? DEFAULT_MODEL[id]
       const fallback = entry.models.find((m) => m.default) ?? entry.models[0]
       return {
         id,
         label: AGENT_LABELS[id],
-        available: cred?.configured === true,
-        reason: cred?.configured ? null : 'No credential configured',
+        available: configured,
+        reason: configured ? null : 'No account configured',
         models: entry.models,
         defaultModel: entry.models.some((m) => m.id === preferred) ? preferred : (fallback?.id ?? preferred),
         modelsSource: entry.source,
@@ -305,11 +312,40 @@ export function createApp(deps: AppDeps): Hono {
 
   app.get('/api/credentials', async (c) => c.json(await deps.credentials.list()))
 
-  app.post('/api/credentials/codex/device-login', async (c) => c.json(await deps.deviceLogins.start()))
-  app.get('/api/credentials/codex/device-login/:id', async (c) => {
+  // ---- accounts ----------------------------------------------------------------------
+
+  app.get('/api/accounts', async (c) => {
+    const body: AccountsResponse = { accounts: await deps.credentials.accounts() }
+    return c.json(body)
+  })
+  app.post('/api/accounts', jsonBody(createAccountSchema), async (c) => {
+    const body = c.req.valid('json')
+    let account: AgentAccount
+    if (body.agent === 'claude') {
+      const token = body.token?.trim()
+      if (!token) throw badRequest('token is required')
+      if (!token.startsWith('sk-ant-')) throw badRequest('token must start with sk-ant-')
+      account = await deps.credentials.addAccount('claude', body.name ?? null, { token }, maskToken(token), token.startsWith('sk-ant-oat') ? 'oauth' : 'api-key')
+    } else {
+      const apiKey = body.apiKey?.trim()
+      if (!apiKey) throw badRequest('apiKey is required')
+      if (!apiKey.startsWith('sk-')) throw badRequest('apiKey must start with sk-')
+      account = await deps.credentials.addAccount('codex', body.name ?? null, { apiKey }, maskToken(apiKey), 'api-key')
+    }
+    void deps.catalog.refresh(body.agent)
+    return c.json(account, 201)
+  })
+  app.post('/api/accounts/codex/device-login', jsonBody(startDeviceLoginSchema), async (c) => c.json(await deps.deviceLogins.start(c.req.valid('json').name ?? null)))
+  app.get('/api/accounts/codex/device-login/:id', async (c) => {
     const login = await deps.deviceLogins.get(c.req.param('id'))
     if (!login) throw notFound('device login')
     return c.json(login)
+  })
+  app.patch('/api/accounts/:id', jsonBody(updateAccountSchema), async (c) => c.json(await deps.credentials.renameAccount(c.req.param('id'), c.req.valid('json').name)))
+  app.delete('/api/accounts/:id', async (c) => {
+    const removed = await deps.credentials.removeAccount(c.req.param('id'))
+    if (!(await deps.credentials.hasAccounts(removed.agent))) await deps.catalog.clear(removed.agent)
+    return c.body(null, 204)
   })
 
   app.get('/api/credentials/github/repos', async (c) => {
@@ -342,23 +378,6 @@ export function createApp(deps: AppDeps): Hono {
     const kind = parseKind(c.req.param('kind'))
     const body = c.req.valid('json')
     switch (kind) {
-      case 'claude': {
-        const token = body.token?.trim()
-        if (!token) throw badRequest('token is required')
-        if (!token.startsWith('sk-ant-')) throw badRequest('token must start with sk-ant-')
-        const method = token.startsWith('sk-ant-oat') ? 'oauth' : 'api-key'
-        const status = await deps.credentials.put('claude', { token }, maskToken(token), method)
-        void deps.catalog.refresh('claude')
-        return c.json(status)
-      }
-      case 'codex': {
-        const apiKey = body.apiKey?.trim()
-        if (!apiKey) throw badRequest('apiKey is required')
-        if (!apiKey.startsWith('sk-')) throw badRequest('apiKey must start with sk-')
-        const status = await deps.credentials.put('codex', { apiKey }, maskToken(apiKey), 'api-key')
-        void deps.catalog.refresh('codex')
-        return c.json(status)
-      }
       case 'github': {
         const token = body.token?.trim()
         if (!token) throw badRequest('token is required')
@@ -384,9 +403,7 @@ export function createApp(deps: AppDeps): Hono {
     }
   })
   app.delete('/api/credentials/:kind', async (c) => {
-    const kind = parseKind(c.req.param('kind'))
-    await deps.credentials.remove(kind)
-    if (kind === 'claude' || kind === 'codex') await deps.catalog.clear(kind)
+    await deps.credentials.remove(parseKind(c.req.param('kind')))
     return c.body(null, 204)
   })
 
@@ -458,6 +475,7 @@ export function createApp(deps: AppDeps): Hono {
       model: body.model,
       ...(body.images ? { images: body.images } : {}),
       ...(body.permissions ? { permissions: body.permissions } : {}),
+      ...(body.accountId ? { accountId: body.accountId } : {}),
       ...(body.baseBranch ? { baseBranch: body.baseBranch } : {}),
     })
     return c.json(thread, 201)
@@ -469,6 +487,7 @@ export function createApp(deps: AppDeps): Hono {
       await deps.threads.update(c.req.param('id'), {
         ...(body.title !== undefined ? { title: body.title } : {}),
         ...(body.autoFixCi !== undefined ? { autoFixCi: body.autoFixCi } : {}),
+        ...(body.accountId !== undefined ? { accountId: body.accountId } : {}),
       }),
     )
   })

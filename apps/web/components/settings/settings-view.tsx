@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
+  ACCOUNT_NAME_RE,
   AGENT_LABELS,
   DEFAULT_MODELS,
   MAX_WEBHOOKS,
@@ -10,6 +11,7 @@ import {
   NOTIFICATION_EVENT_LABELS,
   WEBHOOK_LABELS,
   formatBytes,
+  type AgentAccount,
   type AgentKind,
   type CredentialKind,
   type CredentialStatus,
@@ -23,7 +25,7 @@ import {
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
-import { useAgents, useCredentials, useGitHubApp, useNotifications, useSettings, useSnapshots } from '@/lib/hooks'
+import { useAccounts, useAgents, useCredentials, useGitHubApp, useNotifications, useSettings, useSnapshots } from '@/lib/hooks'
 import { disablePush, enablePush, pushStatus, type PushState, type PushStatus } from '@/lib/push'
 import {
   AlertDialog,
@@ -52,6 +54,7 @@ export function SettingsView() {
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 px-6 py-8">
         <h1 className="text-lg font-medium">Settings</h1>
+        <Accounts />
         <Credentials />
         <McpServers />
         <Sandbox />
@@ -75,36 +78,182 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 const METHOD_LABEL: Record<'oauth' | 'api-key', string> = { oauth: 'Subscription', 'api-key': 'API key' }
 
-function Credentials() {
-  const { data, mutate } = useCredentials()
+/** The agent CLIs' accounts: several per agent, each named, each a subscription or an API key. */
+function Accounts() {
+  const { data, mutate } = useAccounts()
   const { mutate: mutateAgents } = useAgents()
-  const byKind = new Map<CredentialKind, CredentialStatus>((data ?? []).map((c) => [c.kind, c]))
   if (!data) return null
   const changed = (): void => {
     void mutate()
     void mutateAgents()
   }
+  return (
+    <Section title="Accounts">
+      <div className="flex flex-col gap-8">
+        {(Object.keys(AGENT_LABELS) as AgentKind[]).map((agent) => (
+          <AgentAccounts key={agent} agent={agent} accounts={data.accounts.filter((a) => a.agent === agent)} onChange={changed} />
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+const ACCOUNT_FIELD: Record<AgentKind, { key: 'token' | 'apiKey'; label: string; placeholder: string }> = {
+  claude: { key: 'token', label: 'Token', placeholder: 'sk-ant-oat... or sk-ant-api...' },
+  codex: { key: 'apiKey', label: 'API key', placeholder: 'sk-...' },
+}
+
+function AgentAccounts({ agent, accounts, onChange }: { agent: AgentKind; accounts: AgentAccount[]; onChange: () => void }) {
+  const [name, setName] = useState('')
+  const [secret, setSecret] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const field = ACCOUNT_FIELD[agent]
+  const validName = name.trim() === '' || ACCOUNT_NAME_RE.test(name.trim())
+
+  async function add(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    if (!validName || !secret.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.accounts.create({ agent, ...(name.trim() ? { name: name.trim() } : {}), [field.key]: secret.trim() })
+      setName('')
+      setSecret('')
+      onChange()
+      toast.success(`${AGENT_LABELS[agent]} account saved`)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <h3 className="text-sm font-medium">{AGENT_LABELS[agent]}</h3>
+      <ModelsLine agent={agent} configured={accounts.length > 0} />
+      {accounts.length > 0 ? (
+        <ul className="flex flex-col gap-1">
+          {accounts.map((a) => (
+            <AccountRow key={a.id} account={a} onChange={onChange} />
+          ))}
+        </ul>
+      ) : (
+        <span className="text-xs text-muted-foreground">No accounts</span>
+      )}
+      <form onSubmit={add} className="flex flex-wrap items-end gap-2">
+        <div className="flex w-40 flex-col gap-1.5">
+          <Label htmlFor={`${agent}-account-name`}>Name</Label>
+          <Input
+            id={`${agent}-account-name`}
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value)
+              setError(null)
+            }}
+            aria-invalid={!validName}
+          />
+        </div>
+        <div className="flex min-w-48 flex-1 flex-col gap-1.5">
+          <Label htmlFor={`${agent}-account-${field.key}`}>{field.label}</Label>
+          <Input
+            id={`${agent}-account-${field.key}`}
+            type="password"
+            autoComplete="off"
+            value={secret}
+            onChange={(e) => {
+              setSecret(e.target.value)
+              setError(null)
+            }}
+            placeholder={field.placeholder}
+            className="font-mono"
+          />
+        </div>
+        <Button type="submit" size="default" disabled={busy || !validName || !secret.trim()}>
+          Add
+        </Button>
+        {agent === 'codex' && <CodexDeviceLogin name={validName ? name.trim() : undefined} onComplete={onChange} />}
+      </form>
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function AccountRow({ account, onChange }: { account: AgentAccount; onChange: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState<string | null>(null)
+
+  async function rename(e: FormEvent): Promise<void> {
+    e.preventDefault()
+    const name = draft?.trim() ?? ''
+    if (!ACCOUNT_NAME_RE.test(name)) return
+    setBusy(true)
+    try {
+      await api.accounts.update(account.id, { name })
+      setDraft(null)
+      onChange()
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(): Promise<void> {
+    setBusy(true)
+    try {
+      await api.accounts.remove(account.id)
+      onChange()
+    } catch (err) {
+      toast.error(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      {draft !== null ? (
+        <form onSubmit={rename} className="flex items-center gap-2">
+          <Input value={draft} onChange={(e) => setDraft(e.target.value)} aria-label="Account name" className="h-7 w-40" autoFocus />
+          <Button type="submit" size="xs" disabled={busy || !ACCOUNT_NAME_RE.test(draft.trim())}>
+            Save
+          </Button>
+          <Button type="button" size="xs" variant="ghost" onClick={() => setDraft(null)}>
+            Cancel
+          </Button>
+        </form>
+      ) : (
+        <>
+          <span className="font-medium">{account.name}</span>
+          <span className="font-mono text-xs">{account.label}</span>
+          <span className="text-xs text-muted-foreground">{METHOD_LABEL[account.method]}</span>
+          <span className="text-xs text-muted-foreground">{relativeTime(account.updatedAt)}</span>
+          <Button size="xs" variant="ghost" disabled={busy} onClick={() => setDraft(account.name)}>
+            Rename
+          </Button>
+          <Button size="xs" variant="ghost" disabled={busy} onClick={() => void remove()}>
+            Remove
+          </Button>
+        </>
+      )}
+    </li>
+  )
+}
+
+function Credentials() {
+  const { data, mutate } = useCredentials()
+  const byKind = new Map<CredentialKind, CredentialStatus>((data ?? []).map((c) => [c.kind, c]))
+  if (!data) return null
 
   return (
     <Section title="Credentials">
       <div className="flex flex-col gap-8">
-        <CredentialRow
-          kind="claude"
-          title="Claude Code"
-          status={byKind.get('claude')}
-          fields={[{ key: 'token', label: 'Token', placeholder: 'sk-ant-oat... or sk-ant-api...' }]}
-          models={<ModelsLine agent="claude" configured={byKind.get('claude')?.configured ?? false} />}
-          onChange={changed}
-        />
-        <CredentialRow
-          kind="codex"
-          title="Codex"
-          status={byKind.get('codex')}
-          fields={[{ key: 'apiKey', label: 'API key', placeholder: 'sk-...' }]}
-          models={<ModelsLine agent="codex" configured={byKind.get('codex')?.configured ?? false} />}
-          extra={<CodexDeviceLogin onComplete={changed} />}
-          onChange={changed}
-        />
         <CredentialRow
           kind="github"
           title="GitHub"
@@ -118,23 +267,19 @@ function Credentials() {
   )
 }
 
-type Field = { key: 'token' | 'apiKey'; label: string; placeholder: string }
+type Field = { key: 'token'; label: string; placeholder: string }
 
 function CredentialRow({
   kind,
   title,
   status,
   fields,
-  models,
-  extra,
   onChange,
 }: {
   kind: CredentialKind
   title: string
   status: CredentialStatus | undefined
   fields: Field[]
-  models?: ReactNode
-  extra?: ReactNode
   onChange: () => void
 }) {
   const [value, setValue] = useState('')
@@ -179,7 +324,6 @@ function CredentialRow({
         {configured && status ? (
           <>
             <span className="font-mono text-xs">{status.label}</span>
-            {status.method && <span className="text-xs text-muted-foreground">{METHOD_LABEL[status.method]}</span>}
             {status.updatedAt && <span className="text-xs text-muted-foreground">{relativeTime(status.updatedAt)}</span>}
             <Button size="xs" variant="ghost" disabled={busy} onClick={() => void remove()}>
               Remove
@@ -189,8 +333,6 @@ function CredentialRow({
           <span className="text-xs text-muted-foreground">Not configured</span>
         )}
       </div>
-      {models}
-      {extra && <div>{extra}</div>}
       <div className="flex flex-wrap items-end gap-3">
         <form onSubmit={save} className="flex flex-1 items-end gap-2">
           <div className="flex min-w-48 flex-1 flex-col gap-1.5">
@@ -407,16 +549,18 @@ function ModelsLine({ agent, configured }: { agent: AgentKind; configured: boole
   )
 }
 
-function CodexDeviceLogin({ onComplete }: { onComplete: () => void }) {
+/** Signs a ChatGPT subscription in as a Codex account called `name` (empty: generated); undefined while the typed name is invalid. */
+function CodexDeviceLogin({ name, onComplete }: { name: string | undefined; onComplete: () => void }) {
   const [login, setLogin] = useState<DeviceLogin | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   async function start(): Promise<void> {
+    if (name === undefined) return
     setBusy(true)
     setError(null)
     try {
-      setLogin(await api.credentials.codexDeviceLogin.start())
+      setLogin(await api.accounts.codexDeviceLogin.start(name ? { name } : {}))
     } catch (err) {
       toast.error(errorMessage(err))
     } finally {
@@ -427,7 +571,7 @@ function CodexDeviceLogin({ onComplete }: { onComplete: () => void }) {
   useEffect(() => {
     if (!login || login.status !== 'pending') return
     const timer = setInterval(() => {
-      api.credentials.codexDeviceLogin
+      api.accounts.codexDeviceLogin
         .get(login.id)
         .then((next) => {
           setLogin(next)
@@ -443,7 +587,7 @@ function CodexDeviceLogin({ onComplete }: { onComplete: () => void }) {
 
   return (
     <>
-      <Button type="button" variant="outline" onClick={() => void start()} disabled={busy}>
+      <Button type="button" variant="outline" onClick={() => void start()} disabled={busy || name === undefined}>
         Sign in with ChatGPT
       </Button>
       <Dialog open={login !== null} onOpenChange={(o) => !o && setLogin(null)}>
@@ -541,6 +685,7 @@ function Snapshots() {
 function Defaults() {
   const { data: settings, mutate } = useSettings()
   const { data: agentsData } = useAgents()
+  const { data: accountsData } = useAccounts()
   const [draft, setDraft] = useState<Settings | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -621,6 +766,28 @@ function Defaults() {
               </Select>
             </div>
           ))}
+          {(Object.keys(AGENT_LABELS) as AgentKind[]).map((agent) => {
+            const accounts = (accountsData?.accounts ?? []).filter((a) => a.agent === agent)
+            if (accounts.length < 2) return null
+            const value = accounts.some((a) => a.id === draft.defaultAccount[agent]) ? draft.defaultAccount[agent] : accounts[0]?.id
+            return (
+              <div key={agent} className="flex flex-col gap-1.5">
+                <Label htmlFor={`account-${agent}`}>{AGENT_LABELS[agent]} account</Label>
+                <Select value={value} onValueChange={(v) => setDraft({ ...draft, defaultAccount: { ...draft.defaultAccount, [agent]: v } })}>
+                  <SelectTrigger id={`account-${agent}`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accounts.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )
+          })}
           {(Object.keys(AGENT_LABELS) as AgentKind[]).map((agent) => (
             <div key={agent} className="flex flex-col gap-1.5">
               <Label htmlFor={`permissions-${agent}`}>{AGENT_LABELS[agent]} permissions</Label>

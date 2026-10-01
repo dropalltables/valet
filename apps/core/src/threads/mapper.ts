@@ -10,6 +10,7 @@ export function toThread(row: ThreadRow): Thread {
     agent: row.agent,
     model: row.model,
     permissions: row.permissions,
+    accountId: row.accountId,
     status: row.status,
     error: row.error,
     branch: row.branch,

@@ -152,6 +152,7 @@ const THREAD_ROW: Thread = {
   agent: 'claude',
   model: 'sonnet',
   permissions: 'acceptEdits',
+  accountId: 'acct-personal',
   status: 'running',
   error: null,
   branch: 'valet/add-sharing-1a2b',

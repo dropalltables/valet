@@ -7,7 +7,7 @@ import { DEFAULT_MODEL, DEFAULT_MODELS, DEFAULT_PERMISSIONS, PERMISSION_MODES, t
 import { ImageIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import { useAgents, useBranches, useSettings } from '@/lib/hooks'
+import { useAccounts, useAgents, useBranches, useSettings } from '@/lib/hooks'
 import {
   PromptInput,
   PromptInputButton,
@@ -58,6 +58,8 @@ function Composer() {
   const [agent, setAgent] = useState<AgentKind | null>(null)
   const [model, setModel] = useState<string | null>(null)
   const [permissions, setPermissions] = useState<PermissionMode | null>(null)
+  const [accountId, setAccountId] = useState<string | null>(null)
+  const { data: accountsData } = useAccounts()
   const [busy, setBusy] = useState(false)
 
   const project = projects.find((p) => p.id === projectId) ?? null
@@ -89,6 +91,10 @@ function Composer() {
     ) ??
     models[0]?.id ??
     null
+  const accounts = useMemo(() => (accountsData?.accounts ?? []).filter((a) => a.agent === agent), [accountsData, agent])
+  // The pick, then the settings default, then the agent's oldest account.
+  const effectiveAccount =
+    [accountId, agent && settings?.defaultAccount[agent], accounts[0]?.id].find((id): id is string => !!id && accounts.some((a) => a.id === id)) ?? null
   const permissionModes = agent ? PERMISSION_MODES[agent] : []
   // The pick, then the settings default, then the built-in default; each agent has its own modes.
   const effectivePermissions =
@@ -122,6 +128,7 @@ function Composer() {
         agent,
         model: effectiveModel,
         ...(effectivePermissions ? { permissions: effectivePermissions } : {}),
+        ...(effectiveAccount ? { accountId: effectiveAccount } : {}),
         baseBranch: effectiveBranch,
       })
       upsertThread({ ...thread, projectName: project.name, diffStats: null, mcpServers: 0 })
@@ -200,6 +207,7 @@ function Composer() {
                 setAgent(v as AgentKind)
                 setModel(null)
                 setPermissions(null)
+                setAccountId(null)
               }}
             >
               <PromptInputSelectTrigger size="sm" aria-label="Agent">
@@ -247,6 +255,20 @@ function Composer() {
                 ))}
               </PromptInputSelectContent>
             </PromptInputSelect>
+            {accounts.length > 1 && (
+              <PromptInputSelect value={effectiveAccount ?? ''} onValueChange={setAccountId}>
+                <PromptInputSelectTrigger size="sm" aria-label="Account">
+                  <PromptInputSelectValue placeholder="Account" />
+                </PromptInputSelectTrigger>
+                <PromptInputSelectContent position="popper" align="end">
+                  {accounts.map((a) => (
+                    <PromptInputSelectItem key={a.id} value={a.id}>
+                      {a.name}
+                    </PromptInputSelectItem>
+                  ))}
+                </PromptInputSelectContent>
+              </PromptInputSelect>
+            )}
             <Button type="submit" size="sm" className="shrink-0" disabled={!canSubmit}>
               Start
               <kbd className="ml-1 font-sans text-xs text-primary-foreground/70">{modKey}+Enter</kbd>

@@ -1,8 +1,11 @@
-import { eq } from 'drizzle-orm'
-import type { CredentialKind, CredentialStatus } from '@valet/shared'
+import { asc, eq } from 'drizzle-orm'
+import { AGENT_LABELS, type AgentAccount, type AgentKind, type CredentialKind, type CredentialStatus } from '@valet/shared'
 import type { Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
-import { credentials } from '../db/schema.js'
+import { accounts, credentials, type AccountRow } from '../db/schema.js'
+import { conflict, notFound } from '../errors.js'
+import { newId } from '../ids.js'
+import { randomAccountName } from './names.js'
 import { GitHubApp, type GitHubAppCredentials, type RepoRef } from '../git/github.js'
 import { logger } from '../logger.js'
 
@@ -21,11 +24,16 @@ export type CodexAuthJson = {
 export type GitHubAppPayload = GitHubAppCredentials & { webhookSecret: string }
 
 export type CredentialPayload = {
-  claude: { token: string }
-  codex: { apiKey: string } | { authJson: CodexAuthJson }
   github: { token: string }
   'github-app': GitHubAppPayload
 }
+
+export type AccountPayload = {
+  claude: { token: string }
+  codex: { apiKey: string } | { authJson: CodexAuthJson }
+}
+
+export type StoredAccount<A extends AgentKind = AgentKind> = AgentAccount & { agent: A; payload: AccountPayload[A] }
 
 export type StoredCredential<K extends CredentialKind> = {
   kind: K
@@ -35,7 +43,18 @@ export type StoredCredential<K extends CredentialKind> = {
   updatedAt: Date
 }
 
-const KINDS: CredentialKind[] = ['claude', 'codex', 'github', 'github-app']
+const KINDS: CredentialKind[] = ['github', 'github-app']
+
+/** Postgres: unique_violation. */
+const UNIQUE_VIOLATION = '23505'
+
+function toAccount(row: Pick<AccountRow, 'id' | 'agent' | 'name' | 'label' | 'method' | 'createdAt' | 'updatedAt'>): AgentAccount {
+  return { id: row.id, agent: row.agent, name: row.name, label: row.label, method: row.method, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() }
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === UNIQUE_VIOLATION
+}
 
 /** `sk-ant-oat01-abc...9f2a` -> `sk-ant-oat…9f2a`; `ghp_abc...a1b2` -> `ghp_…a1b2`. */
 export function maskToken(token: string): string {
@@ -62,7 +81,7 @@ export class CredentialStore {
         kind,
         configured: row !== undefined,
         label: row?.label ?? null,
-        method: kind === 'claude' || kind === 'codex' ? (row?.method ?? null) : null,
+        method: null,
         updatedAt: row?.updatedAt.toISOString() ?? null,
       }
     })
@@ -106,19 +125,83 @@ export class CredentialStore {
     if (kind === 'github-app') this.appTokens.clear()
   }
 
-  /** Env for the Claude Code CLI, keyed by token type. */
-  async claudeEnv(): Promise<Record<string, string> | null> {
-    const cred = await this.get('claude')
-    if (!cred) return null
-    const token = cred.payload.token
+  // ---- agent accounts -------------------------------------------------------------
+
+  /** Every account, oldest first; `agent` narrows to one agent. */
+  async accounts(agent?: AgentKind): Promise<AgentAccount[]> {
+    const rows = await this.db
+      .select()
+      .from(accounts)
+      .where(agent ? eq(accounts.agent, agent) : undefined)
+      .orderBy(asc(accounts.createdAt), asc(accounts.id))
+    return rows.map(toAccount)
+  }
+
+  async hasAccounts(agent: AgentKind): Promise<boolean> {
+    return (await this.accounts(agent)).length > 0
+  }
+
+  /** The agent's oldest account: what runs when nothing picked one. */
+  async firstAccount(agent: AgentKind): Promise<AgentAccount | null> {
+    return (await this.accounts(agent))[0] ?? null
+  }
+
+  async account(id: string): Promise<StoredAccount | null> {
+    const [row] = await this.db.select().from(accounts).where(eq(accounts.id, id))
+    if (!row) return null
+    return { ...toAccount(row), payload: this.cipher.decryptJson<AccountPayload[AgentKind]>(row.payloadEnc) }
+  }
+
+  /** 409 when the agent already has an account with that name; a null name is generated. */
+  async addAccount<A extends AgentKind>(agent: A, name: string | null, payload: AccountPayload[A], label: string | null, method: 'oauth' | 'api-key'): Promise<AgentAccount> {
+    const now = new Date()
+    const payloadEnc = this.cipher.encryptJson(payload)
+    const row = { id: newId(), agent, name: name ?? randomAccountName(), payloadEnc, label, method, createdAt: now, updatedAt: now }
+    await this.db.insert(accounts).values(row).catch((err: unknown) => {
+      throw isUniqueViolation(err) ? conflict(`${AGENT_LABELS[agent]} already has an account named ${row.name}`) : err
+    })
+    return toAccount(row)
+  }
+
+  async renameAccount(id: string, name: string): Promise<AgentAccount> {
+    const [row] = await this.db
+      .update(accounts)
+      .set({ name, updatedAt: new Date() })
+      .where(eq(accounts.id, id))
+      .returning()
+      .catch((err: unknown) => {
+        throw isUniqueViolation(err) ? conflict(`An account named ${name} already exists for this agent`) : err
+      })
+    if (!row) throw notFound('account')
+    return toAccount(row)
+  }
+
+  /** Replaces the secret, keeping the name: Codex rewrites its tokens on refresh. */
+  async updateAccountPayload<A extends AgentKind>(id: string, payload: AccountPayload[A]): Promise<void> {
+    await this.db.update(accounts).set({ payloadEnc: this.cipher.encryptJson(payload), updatedAt: new Date() }).where(eq(accounts.id, id))
+  }
+
+  /** Threads that ran under it keep their history; their `accountId` becomes null. */
+  async removeAccount(id: string): Promise<AgentAccount> {
+    const [row] = await this.db.delete(accounts).where(eq(accounts.id, id)).returning()
+    if (!row) throw notFound('account')
+    return toAccount(row)
+  }
+
+  /** Env for the Claude Code CLI under one account, keyed by token type. */
+  async claudeEnvFor(accountId: string): Promise<Record<string, string> | null> {
+    const account = await this.account(accountId)
+    if (!account || account.agent !== 'claude' || !('token' in account.payload)) return null
+    const token = account.payload.token
     return token.startsWith('sk-ant-oat') ? { CLAUDE_CODE_OAUTH_TOKEN: token } : { ANTHROPIC_API_KEY: token }
   }
 
-  async codexAuth(): Promise<{ mode: 'api-key'; apiKey: string } | { mode: 'oauth'; authJson: CodexAuthJson; label: string | null } | null> {
-    const cred = await this.get('codex')
-    if (!cred) return null
-    if ('apiKey' in cred.payload) return { mode: 'api-key', apiKey: cred.payload.apiKey }
-    return { mode: 'oauth', authJson: cred.payload.authJson, label: cred.label }
+  async codexAuthFor(accountId: string): Promise<{ mode: 'api-key'; apiKey: string } | { mode: 'oauth'; authJson: CodexAuthJson } | null> {
+    const account = await this.account(accountId)
+    if (!account || account.agent !== 'codex') return null
+    if ('apiKey' in account.payload) return { mode: 'api-key', apiKey: account.payload.apiKey }
+    if ('authJson' in account.payload) return { mode: 'oauth', authJson: account.payload.authJson }
+    return null
   }
 
   /** The personal access token; user-scoped calls (listing repositories) need it. */

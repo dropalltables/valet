@@ -94,9 +94,9 @@ export class ModelCatalog {
 
   /** Refreshes, in the background, every configured agent whose list is missing or older than `maxAgeMs`. */
   async refreshStale(maxAgeMs: number): Promise<void> {
-    const [entries, creds] = await Promise.all([this.all(), this.credentials.list()])
+    const entries = await this.all()
     for (const agent of AGENTS) {
-      if (!creds.find((c) => c.kind === agent)?.configured) continue
+      if (!(await this.credentials.hasAccounts(agent))) continue
       const at = entries[agent].refreshedAt
       if (at && Date.now() - at.getTime() < maxAgeMs) continue
       void this.refresh(agent)
@@ -107,8 +107,8 @@ export class ModelCatalog {
     const started = Date.now()
     try {
       const models = await this.fetch(agent)
-      // The credential may have been removed while the CLI ran; its list no longer applies.
-      if (models === null || !(await this.credentials.get(agent))) {
+      // The account may have been removed while the CLI ran; its list no longer applies.
+      if (models === null || !(await this.credentials.hasAccounts(agent))) {
         await this.clear(agent)
         return DEFAULT_ENTRY(agent)
       }
@@ -123,7 +123,7 @@ export class ModelCatalog {
     } catch (err) {
       const error = errorMessage(err)
       log.warn('model catalog refresh failed', { agent, error, ms: Date.now() - started })
-      if (!(await this.credentials.get(agent))) {
+      if (!(await this.credentials.hasAccounts(agent))) {
         await this.clear(agent)
         return DEFAULT_ENTRY(agent)
       }
@@ -136,10 +136,12 @@ export class ModelCatalog {
     }
   }
 
-  /** Null when no credential is configured for the agent. */
+  /** Asks under the agent's oldest account; null when it has none. */
   private async fetch(agent: AgentKind): Promise<ModelOption[] | null> {
-    const claude = agent === 'claude' ? await this.credentials.claudeEnv() : null
-    const codex = agent === 'codex' ? await this.credentials.codexAuth() : null
+    const account = await this.credentials.firstAccount(agent)
+    if (!account) return null
+    const claude = agent === 'claude' ? await this.credentials.claudeEnvFor(account.id) : null
+    const codex = agent === 'codex' ? await this.credentials.codexAuthFor(account.id) : null
     if (!claude && !codex) return null
 
     const id = newId()
@@ -167,7 +169,7 @@ export class ModelCatalog {
           return await listCodexModels({ runner: exec, cwd: SANDBOX.home, env, timeoutMs: remainingMs() })
         } finally {
           if (codex.mode === 'oauth') {
-            await syncCodexAuth(supervisor, this.credentials).catch((err: unknown) => log.warn('codex auth sync failed', { name, err }))
+            await syncCodexAuth(supervisor, this.credentials, account.id).catch((err: unknown) => log.warn('codex auth sync failed', { name, err }))
           }
         }
       } finally {
