@@ -6,7 +6,7 @@ import { loadConfig } from '../src/config.js'
 import { Cipher } from '../src/crypto.js'
 import type { Db } from '../src/db/index.js'
 import { notFound } from '../src/errors.js'
-import { PortalAuth } from '../src/portals/auth.js'
+import { ServiceAuth } from '../src/services/auth.js'
 import type { ThreadService } from '../src/threads/service.js'
 import { ThreadShares } from '../src/threads/share.js'
 import { forShared } from '../src/ws/index.js'
@@ -106,19 +106,19 @@ test('malformed, forged, and unknown tokens resolve to null', async () => {
   assert.equal(await s.resolve(tokenOf((await other.create(THREAD)).url ?? '')), null)
 })
 
-test('a portal token is not a share token, and a share token is not a portal token', async () => {
+test('a service token is not a share token, and a share token is not a service token', async () => {
   const { shares: s, cipher } = shares()
   const shareUrl = (await s.create(THREAD)).url ?? ''
-  const portalAuth = new PortalAuth(cipher, true, null as unknown as Db)
+  const serviceAuth = new ServiceAuth(cipher, true, null as unknown as Db)
 
   // Same cipher, same thread, same generation, and one is even unexpired.
   for (const scope of ['owner', 'share'] as const) {
     for (const exp of [Date.now() + 60_000, Date.now() - 1]) {
-      const raw = portalAuth.mint({ v: 1, t: THREAD, p: 3000, s: scope, g: 0, exp, ret: '/' })
+      const raw = serviceAuth.mint({ v: 1, t: THREAD, p: 3000, s: scope, g: 0, exp, ret: '/' })
       assert.equal(await s.resolve(raw), null)
     }
   }
-  assert.equal(portalAuth.read(tokenOf(shareUrl)), null)
+  assert.equal(serviceAuth.read(tokenOf(shareUrl)), null)
 })
 
 test('bad tokens never cost a valid link its answer', async () => {
@@ -182,8 +182,8 @@ test('a link holder sees the transcript without ids, cost, sandbox handles, port
     },
   })
 
-  assert.equal(forShared({ t: 'portals', portals: [] }, 'Valet'), null)
   assert.equal(forShared({ t: 'services', services: [] }, 'Valet'), null)
+  assert.equal(forShared({ t: 'managed-services', services: [] }, 'Valet'), null)
   assert.equal(forShared({ t: 'usage', usage: USAGE }, 'Valet'), null)
   assert.equal(forShared({ t: 'event', seq: 3, event: { type: 'session', agentSessionId: 'sess-1' } }, 'Valet'), null)
 

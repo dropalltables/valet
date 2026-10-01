@@ -1,6 +1,6 @@
-import type { Portal, SharedThread, Thread, ThreadListItem } from '@valet/shared'
+import type { Service, SharedThread, Thread, ThreadListItem } from '@valet/shared'
 import type { ThreadRow } from '../db/schema.js'
-import type { PortalUrls } from '../portals/urls.js'
+import type { ServiceUrls } from '../services/urls.js'
 
 export function toThread(row: ThreadRow): Thread {
   return {
@@ -43,9 +43,9 @@ export function toSharedThread(item: Thread & { projectName: string }): SharedTh
   }
 }
 
-export function toPortals(row: ThreadRow, urls: PortalUrls, now = Date.now()): Portal[] {
-  return (row.portals ?? []).map((p) => {
-    const share = row.portalShares?.[String(p.port)]
+export function toServices(row: ThreadRow, urls: ServiceUrls, now = Date.now()): Service[] {
+  return (row.services ?? []).map((p) => {
+    const share = row.serviceShares?.[String(p.port)]
     const active = share?.expiresAt && new Date(share.expiresAt).getTime() > now ? share.expiresAt : null
     return { port: p.port, name: p.name, process: p.process, url: urls.origin(row.id, p.port), shareExpiresAt: active }
   })

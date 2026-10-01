@@ -7,7 +7,7 @@ import { holdBrowserFrames, relay } from '../docker/supervisor-client.js'
 import { HttpError } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { errorMessage, logger } from '../logger.js'
-import type { PortalGateway } from '../portals/gateway.js'
+import type { ServiceGateway } from '../services/gateway.js'
 import { toSharedThread } from '../threads/mapper.js'
 import type { ThreadService } from '../threads/service.js'
 import type { ThreadShares } from '../threads/share.js'
@@ -21,7 +21,7 @@ const CLOSE_FORBIDDEN = 4403
 const CLOSE_PAUSED = 4409
 const CLOSE_ERROR = 4500
 
-export type WsDeps = { auth: Auth; events: EventLog; threads: ThreadService; shares: ThreadShares; portals: PortalGateway }
+export type WsDeps = { auth: Auth; events: EventLog; threads: ThreadService; shares: ThreadShares; services: ServiceGateway }
 
 type Route =
   | { kind: 'global' }
@@ -30,7 +30,7 @@ type Route =
   | { kind: 'share'; token: string; since: number }
   | { kind: 'relay'; id: string; target: 'pty' | 'vnc' }
   | { kind: 'logs'; id: string; name: string; lines: number }
-  | { kind: 'portal'; threadId: string; port: string }
+  | { kind: 'service'; threadId: string; port: string }
 
 const DEFAULT_LOG_LINES = 200
 const MAX_LOG_LINES = 10_000
@@ -44,9 +44,9 @@ function route(url: URL): Route | null {
   if (url.pathname === '/api/stream') return { kind: 'global' }
   const share = /^\/api\/share\/([^/]+)\/stream$/.exec(url.pathname)
   if (share && share[1]) return { kind: 'share', token: share[1], since: since(url) }
-  const portal = /^\/portal\/([^/]+)\/([^/]+)(?:\/|$)/.exec(url.pathname)
-  if (portal && portal[1] && portal[2]) return { kind: 'portal', threadId: portal[1], port: portal[2] }
-  const logs = /^\/api\/threads\/([^/]+)\/services\/([^/]+)\/logs$/.exec(url.pathname)
+  const service = /^\/service\/([^/]+)\/([^/]+)(?:\/|$)/.exec(url.pathname)
+  if (service && service[1] && service[2]) return { kind: 'service', threadId: service[1], port: service[2] }
+  const logs = /^\/api\/threads\/([^/]+)\/managed-services\/([^/]+)\/logs$/.exec(url.pathname)
   if (logs && logs[1] && logs[2]) {
     const lines = Number(url.searchParams.get('lines') ?? DEFAULT_LOG_LINES)
     return { kind: 'logs', id: logs[1], name: logs[2], lines: Number.isInteger(lines) && lines >= 0 ? Math.min(lines, MAX_LOG_LINES) : DEFAULT_LOG_LINES }
@@ -75,10 +75,10 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
         reject(socket, '404 Not Found')
         return
       }
-      if (target.kind === 'portal') {
-        // Portal cookies, not the session cookie, authorize this one.
-        void deps.portals.upgrade(req, socket, head, target.threadId, target.port).catch((err: unknown) => {
-          log.warn('portal upgrade failed', { url: req.url, message: errorMessage(err) })
+      if (target.kind === 'service') {
+        // Service cookies, not the session cookie, authorize this one.
+        void deps.services.upgrade(req, socket, head, target.threadId, target.port).catch((err: unknown) => {
+          log.warn('service upgrade failed', { url: req.url, message: errorMessage(err) })
           if (!socket.destroyed) reject(socket, '502 Bad Gateway')
         })
         return
@@ -116,7 +116,7 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
             void serveRelay(ws, deps, target.id, () => deps.threads.openRelay(target.id, target.target))
             return
           case 'logs':
-            void serveRelay(ws, deps, target.id, () => deps.threads.openServiceLogs(target.id, target.name, target.lines))
+            void serveRelay(ws, deps, target.id, () => deps.threads.openManagedServiceLogs(target.id, target.name, target.lines))
             return
         }
       })
@@ -162,8 +162,8 @@ export function forShared(frame: StreamFrame, projectName: string): StreamFrame 
       }
       return frame
     }
-    case 'portals':
     case 'services':
+    case 'managed-services':
     case 'usage':
       return null
     default:
@@ -240,10 +240,10 @@ async function serveStream(ws: WebSocket, deps: WsDeps, id: string, since: numbe
   const { projectName: _p, diffStats: _d, ...row } = thread
   send({ t: 'thread', thread: row })
   if (visibility === 'owner') {
-    const portals = await deps.threads.portals(id).catch(() => [])
-    send({ t: 'portals', portals })
     const services = await deps.threads.services(id).catch(() => [])
     send({ t: 'services', services })
+    const managed = await deps.threads.managedServices(id).catch(() => [])
+    send({ t: 'managed-services', services: managed })
   }
   send({ t: 'live' })
   if (visibility === 'owner') {

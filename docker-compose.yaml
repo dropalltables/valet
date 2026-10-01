@@ -4,7 +4,7 @@
 #   db       Postgres 17
 #   core     API, orchestrator, and event log. Creates one sandbox container per
 #            thread through the Docker socket, so it needs /var/run/docker.sock.
-#   web      Next.js UI. Proxies /api and portal hosts (t-<thread>-p<port>.*) to core;
+#   web      Next.js UI. Proxies /api and service hosts (t-<thread>-p<port>.*) to core;
 #            publishes the only host port.
 #   sandbox  Build-only (profile `sandbox`): the image every thread runs in.
 #            `docker compose --profile sandbox build` produces valet-sandbox:latest.
@@ -51,7 +51,7 @@ services:
       VALET_SECRET_KEY: ${VALET_SECRET_KEY:?set VALET_SECRET_KEY in .env (32 random bytes, base64)}
       VALET_PASSWORD: ${VALET_PASSWORD:-}
       VALET_BASE_URL: ${VALET_BASE_URL:-http://localhost:3000}
-      VALET_PORTAL_DOMAIN: ${VALET_PORTAL_DOMAIN:-}
+      VALET_SERVICE_DOMAIN: ${VALET_SERVICE_DOMAIN:-}
       VALET_SANDBOX_IMAGE: ${VALET_SANDBOX_IMAGE:-${VALET_IMAGE_PREFIX:-}valet-sandbox:latest}
       VALET_DOCKER_NETWORK: ${VALET_DOCKER_NETWORK:-}
       VALET_REPOS_VOLUME: ${VALET_REPOS_VOLUME:-}
@@ -82,22 +82,22 @@ services:
       VALET_SECRET_KEY: ${VALET_SECRET_KEY}
       VALET_PASSWORD: ${VALET_PASSWORD:-}
       VALET_BASE_URL: ${VALET_BASE_URL:-http://localhost:3000}
-      VALET_PORTAL_DOMAIN: ${VALET_PORTAL_DOMAIN:-}
+      VALET_SERVICE_DOMAIN: ${VALET_SERVICE_DOMAIN:-}
     ports:
       - "${VALET_BIND:-127.0.0.1}:${VALET_PORT:-3000}:3000"
-    # Portals are wildcard subdomains, which Coolify's domain field cannot express, so the
+    # Services are wildcard subdomains, which Coolify's domain field cannot express, so the
     # router is declared here. Leave the domain field empty or two routers claim the host.
     # Coolify escapes `$` in labels unless "Escape special characters in labels" is off;
-    # these need it off. The dots in VALET_PORTAL_DOMAIN are unescaped in the regexp,
+    # these need it off. The dots in VALET_SERVICE_DOMAIN are unescaped in the regexp,
     # which only hosts whose DNS points here ever reach, so nothing more matches.
     labels:
       - traefik.enable=true
-      - traefik.http.routers.valet.rule=Host(`${VALET_PORTAL_DOMAIN}`) || HostRegexp(`^t-[^.]+\.${VALET_PORTAL_DOMAIN}$$`)
+      - traefik.http.routers.valet.rule=Host(`${VALET_SERVICE_DOMAIN}`) || HostRegexp(`^t-[^.]+\.${VALET_SERVICE_DOMAIN}$$`)
       - traefik.http.routers.valet.entrypoints=https
       - traefik.http.routers.valet.tls=true
       - traefik.http.routers.valet.tls.certresolver=${VALET_CERT_RESOLVER:-letsencrypt}
-      - traefik.http.routers.valet.tls.domains[0].main=${VALET_PORTAL_DOMAIN}
-      - traefik.http.routers.valet.tls.domains[0].sans=*.${VALET_PORTAL_DOMAIN}
+      - traefik.http.routers.valet.tls.domains[0].main=${VALET_SERVICE_DOMAIN}
+      - traefik.http.routers.valet.tls.domains[0].sans=*.${VALET_SERVICE_DOMAIN}
       - traefik.http.services.valet.loadbalancer.server.port=3000
       # web sits on more than one network when the proxy brings its own; Traefik needs
       # telling which one it shares, or it picks one at random. Empty means unset.

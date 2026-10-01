@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto'
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib'
-import { PORTAL_REVIEW_PATH, PORTAL_REVIEW_SCRIPT_PATH, type PortalReviewRequest } from '@valet/shared'
+import { SERVICE_REVIEW_PATH, SERVICE_REVIEW_SCRIPT_PATH, type ServiceReviewRequest } from '@valet/shared'
 
 /**
- * The review widget: injected into an owner's HTML pages inside a portal, it sends
+ * The review widget: injected into an owner's HTML pages inside a service, it sends
  * a comment about one element back to `/__valet/review` on the same host.
  *
  * It runs inside someone else's app, so it touches nothing outside its own shadow
@@ -195,7 +195,7 @@ export const REVIEW_WIDGET_JS = `(function () {
     if (!text || !target) return
     send.disabled = true
     status.textContent = ''
-    fetch('${PORTAL_REVIEW_PATH}', {
+    fetch('${SERVICE_REVIEW_PATH}', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ selector: selectorFor(target), path: location.pathname + location.search, excerpt: excerptOf(target), note: text }),
@@ -317,7 +317,7 @@ export function allowInjectedScript(headers: Headers): string | null {
 }
 
 export function widgetTag(nonce: string | null): string {
-  return `<script src="${PORTAL_REVIEW_SCRIPT_PATH}" defer${nonce === null ? '' : ` nonce="${nonce}"`}></script>`
+  return `<script src="${SERVICE_REVIEW_SCRIPT_PATH}" defer${nonce === null ? '' : ` nonce="${nonce}"`}></script>`
 }
 
 /**
@@ -347,7 +347,7 @@ export function injectWidget(html: string, nonce: string | null): string {
 }
 
 /** The comment as it reads in the transcript. */
-export function reviewMessage(req: PortalReviewRequest): string {
-  const head = `Portal comment on ${req.path} (${req.selector}): ${req.note}`
+export function reviewMessage(req: ServiceReviewRequest): string {
+  const head = `Service comment on ${req.path} (${req.selector}): ${req.note}`
   return req.excerpt ? `${head}\n\nElement text: ${req.excerpt}` : head
 }

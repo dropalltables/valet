@@ -1,10 +1,10 @@
-import { PORTAL_WAKE_PATH } from '@valet/shared'
+import { SERVICE_WAKE_PATH } from '@valet/shared'
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-// The same palette as the review widget, so a page core serves on a portal host looks
+// The same palette as the review widget, so a page core serves on a service host looks
 // like the rest of Valet rather than the browser's defaults.
 const STYLE = [
   ':root { color-scheme: light dark; }',
@@ -32,7 +32,7 @@ function page(title: string, body: string): string {
 }
 
 export function pausedPage(canWake: boolean): string {
-  const wake = canWake ? `<form method="post" action="${PORTAL_WAKE_PATH}"><button type="submit">Wake</button></form>` : ''
+  const wake = canWake ? `<form method="post" action="${SERVICE_WAKE_PATH}"><button type="submit">Wake</button></form>` : ''
   return page('Sandbox is paused', `<h1>Sandbox is paused</h1>${wake}`)
 }
 

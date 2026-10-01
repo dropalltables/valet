@@ -320,7 +320,7 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { code };
 
-// Links in a transcript (portal URLs, docs) must not navigate the thread away.
+// Links in a transcript (service URLs, docs) must not navigate the thread away.
 const ExternalLink = ({
   node: _node,
   children,

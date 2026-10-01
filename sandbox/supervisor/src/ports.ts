@@ -148,7 +148,7 @@ export async function listPorts(excludePids: number[] = [], serviceByPort: Map<n
     if (!names.has(pid)) names.set(pid, await processName(pid))
     return names.get(pid) ?? null
   }
-  // One entry per port: v4 and v6 sockets of the same server are one portal.
+  // One entry per port: v4 and v6 sockets of the same server are one service.
   const byPort = new Map<number, number | null>()
   for (const s of sockets) {
     const pid = owners.get(s.inode) ?? null

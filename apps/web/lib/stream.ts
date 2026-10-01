@@ -5,9 +5,9 @@ import {
   LIVE_STATUSES,
   emptyTranscript,
   reduceEvent,
-  type Portal,
-  type SandboxUsage,
   type Service,
+  type SandboxUsage,
+  type ManagedService,
   type SharedThread,
   type StreamFrame,
   type Thread,
@@ -21,10 +21,10 @@ export type StreamState = {
   thread: Thread | null
   /** The reduced row an unlisted link gets instead; null on an owner's stream. */
   shared: SharedThread | null
-  /** Listening ports in the sandbox; replaced whole on every `portals` frame. */
-  portals: Portal[]
-  /** Managed services; replaced whole on every `services` frame. */
+  /** Listening ports in the sandbox; replaced whole on every `services` frame. */
   services: Service[]
+  /** Managed services; replaced whole on every `managed-services` frame. */
+  managedServices: ManagedService[]
   /** Last resource sample of the running container; null until one arrives. */
   usage: SandboxUsage | null
   /** Replay finished; events now arrive as they happen. */
@@ -36,22 +36,22 @@ export type StreamState = {
 }
 
 /** Rows the Services tab shows: managed services plus listening ports no service owns. */
-export function serviceRowCount(services: Service[], portals: Portal[]): number {
-  return services.length + portals.filter((p) => !services.some((s) => s.port === p.port)).length
+export function serviceRowCount(services: Service[], managed: ManagedService[]): number {
+  return services.length + services.filter((p) => !services.some((s) => s.port === p.port)).length
 }
 
 const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 15000
 
 function initial(): StreamState {
-  return { transcript: emptyTranscript(), thread: null, shared: null, portals: [], services: [], usage: null, live: false, connected: false, everConnected: false, error: null }
+  return { transcript: emptyTranscript(), thread: null, shared: null, services: [], managedServices: [], usage: null, live: false, connected: false, everConnected: false, error: null }
 }
 
 /**
  * Keeps one WebSocket to `path` open for the lifetime of the component,
  * reconnecting with `since` set to the last applied `seq` so replay never
  * duplicates events. `path` is `/api/threads/:id/stream` for the owner and
- * `/api/share/:token/stream` for an unlisted link, which carries no portal or
+ * `/api/share/:token/stream` for an unlisted link, which carries no service or
  * service frames.
  */
 export function useThreadStream(path: string): StreamState {
@@ -98,11 +98,11 @@ export function useThreadStream(path: string): StreamState {
           case 'thread.shared':
             setState((s) => ({ ...s, shared: frame.thread }))
             return
-          case 'portals':
-            setState((s) => ({ ...s, portals: frame.portals }))
-            return
           case 'services':
             setState((s) => ({ ...s, services: frame.services }))
+            return
+          case 'managed-services':
+            setState((s) => ({ ...s, managedServices: frame.services }))
             return
           case 'usage':
             setState((s) => ({ ...s, usage: frame.usage }))

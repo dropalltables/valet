@@ -308,7 +308,7 @@ export async function updateUnits(): Promise<string> {
 /**
  * supervisord expands `%(here)s`-style strings in every option, so a literal `%`
  * must be doubled. The unit carries only generated values (a validated name, a
- * port, the portal URL, the thread id): the command, the working directory, and the
+ * port, the service URL, the thread id): the command, the working directory, and the
  * service's own env live in `SANDBOX.serviceSpecsDir` files read by the launcher,
  * because supervisord's parser has no quoting (a newline in a value starts a new
  * key or section, ` ;` starts a comment) and splits `command=` with shlex, so

@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, max, sql } from 'drizzle-orm'
-import type { GlobalFrame, Portal, Project, SandboxUsage, Service, StoredEvent, StreamFrame, Thread, ThreadEvent, ThreadListItem } from '@valet/shared'
+import type { GlobalFrame, Service, Project, SandboxUsage, ManagedService, StoredEvent, StreamFrame, Thread, ThreadEvent, ThreadListItem } from '@valet/shared'
 import type { Db } from '../db/index.js'
 import { threadEvents } from '../db/schema.js'
 import { logger } from '../logger.js'
@@ -214,12 +214,12 @@ export class EventLog {
     this.fanoutGlobal({ t: 'thread', thread })
   }
 
-  publishPortals(threadId: string, portals: Portal[]): void {
-    this.fanout(threadId, { t: 'portals', portals })
-  }
-
   publishServices(threadId: string, services: Service[]): void {
     this.fanout(threadId, { t: 'services', services })
+  }
+
+  publishManagedServices(threadId: string, services: ManagedService[]): void {
+    this.fanout(threadId, { t: 'managed-services', services })
   }
 
   publishUsage(threadId: string, usage: SandboxUsage): void {

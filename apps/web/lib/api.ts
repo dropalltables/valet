@@ -7,8 +7,8 @@ import type {
   CreateAccountRequest,
   CreateProjectRequest,
   CreatePrRequest,
-  CreateServiceRequest,
-  CreateServiceResponse,
+  CreateManagedServiceRequest,
+  CreateManagedServiceResponse,
   CreateThreadRequest,
   CredentialKind,
   CredentialsResponse,
@@ -28,8 +28,8 @@ import type {
   NotificationsResponse,
   NotificationTestResponse,
   PermissionDecisionRequest,
-  PortalAuthUrlResponse,
-  PortalsResponse,
+  ServiceAuthUrlResponse,
+  ServicesResponse,
   Project,
   ProjectEnvResponse,
   ProjectsResponse,
@@ -42,12 +42,12 @@ import type {
   QuestionAnswerRequest,
   SendMessageRequest,
   SendMessageResponse,
-  ServicesResponse,
+  ManagedServicesResponse,
   SessionResponse,
   Settings,
   SharedThreadResponse,
-  SharePortalRequest,
-  SharePortalResponse,
+  ShareServiceRequest,
+  ShareServiceResponse,
   SnapshotsResponse,
   StartDeviceLoginRequest,
   Thread,
@@ -197,22 +197,22 @@ export const api = {
     file: (id: string, path: string) => request<FileResponse>(`/api/threads/${id}/file${q({ path })}`),
     /** The bytes themselves, for elements that fetch their own source. */
     fileRawUrl: (id: string, path: string) => `/api/threads/${id}/file/raw${q({ path })}`,
-    portals: (id: string) => request<PortalsResponse>(`/api/threads/${id}/portals`),
-    portalAuthUrl: (id: string, port: number, path: string) =>
-      request<PortalAuthUrlResponse>(`/api/threads/${id}/portals/${port}/auth${q({ path })}`),
-    sharePortal: (id: string, port: number, body: SharePortalRequest) =>
-      request<SharePortalResponse>(`/api/threads/${id}/portals/${port}/share`, { method: 'POST', body: json(body) }),
-    revokePortalShare: (id: string, port: number) =>
-      request<void>(`/api/threads/${id}/portals/${port}/share`, { method: 'DELETE' }),
-    services: {
-      list: (id: string) => request<ServicesResponse>(`/api/threads/${id}/services`),
-      create: (id: string, body: CreateServiceRequest) =>
-        request<CreateServiceResponse>(`/api/threads/${id}/services`, { method: 'POST', body: json(body) }),
+    services: (id: string) => request<ServicesResponse>(`/api/threads/${id}/services`),
+    serviceAuthUrl: (id: string, port: number, path: string) =>
+      request<ServiceAuthUrlResponse>(`/api/threads/${id}/services/${port}/auth${q({ path })}`),
+    shareService: (id: string, port: number, body: ShareServiceRequest) =>
+      request<ShareServiceResponse>(`/api/threads/${id}/services/${port}/share`, { method: 'POST', body: json(body) }),
+    revokeServiceShare: (id: string, port: number) =>
+      request<void>(`/api/threads/${id}/services/${port}/share`, { method: 'DELETE' }),
+    managedServices: {
+      list: (id: string) => request<ManagedServicesResponse>(`/api/threads/${id}/managed-services`),
+      create: (id: string, body: CreateManagedServiceRequest) =>
+        request<CreateManagedServiceResponse>(`/api/threads/${id}/managed-services`, { method: 'POST', body: json(body) }),
       action: (id: string, name: string, action: 'start' | 'stop' | 'restart') =>
-        request<CreateServiceResponse>(`/api/threads/${id}/services/${encodeURIComponent(name)}/${action}`, { method: 'POST' }),
-      remove: (id: string, name: string) => request<void>(`/api/threads/${id}/services/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+        request<CreateManagedServiceResponse>(`/api/threads/${id}/managed-services/${encodeURIComponent(name)}/${action}`, { method: 'POST' }),
+      remove: (id: string, name: string) => request<void>(`/api/threads/${id}/managed-services/${encodeURIComponent(name)}`, { method: 'DELETE' }),
       logs: (id: string, name: string, lines: number) =>
-        request<string>(`/api/threads/${id}/services/${encodeURIComponent(name)}/logs${q({ lines })}`),
+        request<string>(`/api/threads/${id}/managed-services/${encodeURIComponent(name)}/logs${q({ lines })}`),
     },
     share: {
       get: (id: string) => request<ThreadShareResponse>(`/api/threads/${id}/share`),

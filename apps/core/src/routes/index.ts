@@ -9,8 +9,8 @@ import {
   isPermissionMode,
   GITHUB_WEBHOOK_PATH,
   USAGE_RANGES,
-  createServiceRequestSchema,
-  serviceNameSchema,
+  createManagedServiceRequestSchema,
+  managedServiceNameSchema,
   type AgentInfo,
   type AccountsResponse,
   type AgentAccount,
@@ -21,11 +21,11 @@ import {
   type GitHubAppResponse,
   type Health,
   type McpServersResponse,
-  type PortalsResponse,
+  type ServicesResponse,
   type ProjectsResponse,
   type PushResponse,
   type SendMessageResponse,
-  type ServicesResponse,
+  type ManagedServicesResponse,
   type SharedThreadResponse,
   type ThreadsResponse,
   type UsageResponse,
@@ -46,7 +46,7 @@ import type { McpServerStore } from '../mcp/store.js'
 import type { ModelCatalog } from '../models/catalog.js'
 import type { NotificationService } from '../notifications/service.js'
 import { pushEndpointSchema, pushSubscriptionSchema, putWebhooksSchema } from '../notifications/service.js'
-import type { PortalGateway } from '../portals/gateway.js'
+import type { ServiceGateway } from '../services/gateway.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SnapshotStore } from '../projects/snapshots.js'
 import type { SettingsService } from '../settings.js'
@@ -78,7 +78,7 @@ export type AppDeps = {
   snapshots: SnapshotStore
   threads: ThreadService
   shares: ThreadShares
-  portals: PortalGateway
+  services: ServiceGateway
   usage: UsageService
   mcp: McpServerStore
 }
@@ -157,8 +157,8 @@ function parsePort(raw: string): number {
   return port
 }
 
-function parseServiceName(raw: string): string {
-  const parsed = serviceNameSchema.safeParse(raw)
+function parseManagedServiceName(raw: string): string {
+  const parsed = managedServiceNameSchema.safeParse(raw)
   if (!parsed.success) throw notFound('service')
   return parsed.data
 }
@@ -189,8 +189,8 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ error: errorMessage(err) }, 500)
   })
   app.notFound((c) => c.json({ error: 'not found' }, 404))
-  // Portal traffic authenticates with its own cookie, so it is mounted ahead of the session check.
-  app.route('/', deps.portals.routes())
+  // Service traffic authenticates with its own cookie, so it is mounted ahead of the session check.
+  app.route('/', deps.services.routes())
 
   // GitHub authenticates itself by signing the body, so this one is mounted ahead of it
   // too. Nobody is authenticated when the body is read, so its size is capped first:
@@ -556,37 +556,37 @@ export function createApp(deps: AppDeps): Hono {
     })
   })
 
-  app.get('/api/threads/:id/portals', async (c) => {
-    const body: PortalsResponse = { portals: await deps.threads.portals(c.req.param('id')) }
-    return c.json(body)
-  })
-  app.get('/api/threads/:id/portals/:port/auth', async (c) =>
-    c.json(await deps.portals.authUrl(c.req.param('id'), parsePort(c.req.param('port')), c.req.query('path') ?? '/')),
-  )
-  app.post('/api/threads/:id/portals/:port/share', jsonBody(shareSchema), async (c) =>
-    c.json(await deps.portals.share(c.req.param('id'), parsePort(c.req.param('port')), c.req.valid('json').hours)),
-  )
-  app.delete('/api/threads/:id/portals/:port/share', async (c) => {
-    await deps.portals.revoke(c.req.param('id'), parsePort(c.req.param('port')))
-    return c.body(null, 204)
-  })
-
   app.get('/api/threads/:id/services', async (c) => {
     const body: ServicesResponse = { services: await deps.threads.services(c.req.param('id')) }
     return c.json(body)
   })
-  app.post('/api/threads/:id/services', jsonBody(createServiceRequestSchema), async (c) =>
-    c.json(await deps.threads.createService(c.req.param('id'), c.req.valid('json')), 201),
+  app.get('/api/threads/:id/services/:port/auth', async (c) =>
+    c.json(await deps.services.authUrl(c.req.param('id'), parsePort(c.req.param('port')), c.req.query('path') ?? '/')),
   )
-  app.post('/api/threads/:id/services/:name/:action{start|stop|restart}', async (c) =>
-    c.json(await deps.threads.serviceAction(c.req.param('id'), parseServiceName(c.req.param('name')), c.req.param('action') as 'start' | 'stop' | 'restart')),
+  app.post('/api/threads/:id/services/:port/share', jsonBody(shareSchema), async (c) =>
+    c.json(await deps.services.share(c.req.param('id'), parsePort(c.req.param('port')), c.req.valid('json').hours)),
   )
-  app.delete('/api/threads/:id/services/:name', async (c) => {
-    await deps.threads.removeService(c.req.param('id'), parseServiceName(c.req.param('name')))
+  app.delete('/api/threads/:id/services/:port/share', async (c) => {
+    await deps.services.revoke(c.req.param('id'), parsePort(c.req.param('port')))
     return c.body(null, 204)
   })
-  app.get('/api/threads/:id/services/:name/logs', queryParams(logLinesSchema), async (c) =>
-    c.text(await deps.threads.serviceLogs(c.req.param('id'), parseServiceName(c.req.param('name')), c.req.valid('query').lines)),
+
+  app.get('/api/threads/:id/managed-services', async (c) => {
+    const body: ManagedServicesResponse = { services: await deps.threads.managedServices(c.req.param('id')) }
+    return c.json(body)
+  })
+  app.post('/api/threads/:id/managed-services', jsonBody(createManagedServiceRequestSchema), async (c) =>
+    c.json(await deps.threads.createManagedService(c.req.param('id'), c.req.valid('json')), 201),
+  )
+  app.post('/api/threads/:id/managed-services/:name/:action{start|stop|restart}', async (c) =>
+    c.json(await deps.threads.managedServiceAction(c.req.param('id'), parseManagedServiceName(c.req.param('name')), c.req.param('action') as 'start' | 'stop' | 'restart')),
+  )
+  app.delete('/api/threads/:id/managed-services/:name', async (c) => {
+    await deps.threads.removeManagedService(c.req.param('id'), parseManagedServiceName(c.req.param('name')))
+    return c.body(null, 204)
+  })
+  app.get('/api/threads/:id/managed-services/:name/logs', queryParams(logLinesSchema), async (c) =>
+    c.text(await deps.threads.managedServiceLogs(c.req.param('id'), parseManagedServiceName(c.req.param('name')), c.req.valid('query').lines)),
   )
 
   app.post('/api/threads/:id/push', async (c) => {

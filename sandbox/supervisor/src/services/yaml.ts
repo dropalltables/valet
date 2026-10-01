@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from 'node:path'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { RESERVED_SERVICE_ENV, serviceNameSchema, type ServicePortal } from '@valet/shared'
+import { RESERVED_SERVICE_ENV, managedServiceNameSchema, type ServiceBrowser } from '@valet/shared'
 
 /**
  * `.valet/services.yaml`:
@@ -10,17 +10,17 @@ import { RESERVED_SERVICE_ENV, serviceNameSchema, type ServicePortal } from '@va
  *     web:
  *       command: npm run dev          # required; runs in `cwd` (default: the repo)
  *       cwd: apps/web
- *       port: 3000                    # else assigned when portal or health is set
- *       portal: true                  # or { path: /docs, title: Docs, description: ... }
+ *       port: 3000                    # else assigned when service or health is set
+ *       browser: true                  # or { path: /docs, title: Docs, description: ... }
  *       health: /healthz              # GET must answer 2xx/3xx
- *       review: false                 # keep the portal review widget out of this service's pages
+ *       review: false                 # keep the service review widget out of this service's pages
  *       env:
  *         API_URL: ${services.api.publicURL}
  */
 
 const envValue = z.union([z.string(), z.number(), z.boolean()]).transform(String)
 
-const portalSchema = z.union([
+const browserSchema = z.union([
   z.boolean(),
   z.object({ path: z.string().optional(), title: z.string().optional(), description: z.string().optional() }).strict(),
 ])
@@ -31,13 +31,13 @@ const declaredSchema = z
     cwd: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),
     env: z.record(z.string(), envValue).optional(),
-    portal: portalSchema.optional(),
+    browser: browserSchema.optional(),
     health: z.string().startsWith('/').optional(),
     review: z.boolean().optional(),
   })
   .strict()
 
-const fileSchema = z.object({ services: z.record(serviceNameSchema, declaredSchema) }).strict()
+const fileSchema = z.object({ services: z.record(managedServiceNameSchema, declaredSchema) }).strict()
 
 export type Declared = {
   name: string
@@ -46,7 +46,7 @@ export type Declared = {
   port: number | null
   /** Raw values; `${services.<name>.publicURL}` references are resolved by `resolveEnv`. */
   env: Record<string, string>
-  portal: ServicePortal
+  browser: ServiceBrowser
   health: string | null
   review: boolean
 }
@@ -57,10 +57,10 @@ function issues(error: z.ZodError): string {
   return error.issues.map((i) => `${i.path.join('.') || 'services.yaml'}: ${i.message}`).join('; ')
 }
 
-export function normalizePortal(name: string, portal: boolean | { path?: string | undefined; title?: string | undefined } | undefined): ServicePortal {
-  if (!portal) return false
-  if (portal === true) return { path: '/', title: name }
-  return { path: portal.path ?? '/', title: portal.title ?? name }
+export function normalizeBrowser(name: string, browser: boolean | { path?: string | undefined; title?: string | undefined } | undefined): ServiceBrowser {
+  if (!browser) return false
+  if (browser === true) return { path: '/', title: name }
+  return { path: browser.path ?? '/', title: browser.title ?? name }
 }
 
 /** Throws an Error whose message names the problem; the caller reports it as the ensure error. */
@@ -80,7 +80,7 @@ export function parseServicesYaml(text: string, repo: string): Declared[] {
     for (const key of Object.keys(env)) {
       if ((RESERVED_SERVICE_ENV as readonly string[]).includes(key)) throw new Error(`services.${name}.env.${key}: set by Valet, cannot be declared`)
     }
-    const portal = normalizePortal(name, spec.portal)
+    const browser = normalizeBrowser(name, spec.browser)
     const explicit = spec.port ?? null
     if (explicit !== null) {
       const other = portOwner.get(explicit)
@@ -93,7 +93,7 @@ export function parseServicesYaml(text: string, repo: string): Declared[] {
       cwd: spec.cwd === undefined ? repo : isAbsolute(spec.cwd) ? spec.cwd : resolve(repo, spec.cwd),
       port: explicit,
       env,
-      portal,
+      browser,
       health: spec.health ?? null,
       review: spec.review ?? true,
     })
@@ -131,9 +131,9 @@ function checkReferences(declared: Declared[]): void {
   for (const name of names) visit(name, [])
 }
 
-/** Whether a declared service needs a port: it asked for one, is a portal, or has a health path. */
+/** Whether a declared service needs a port: it asked for one, is a service, or has a health path. */
 export function wantsPort(d: Declared): boolean {
-  return d.port !== null || d.portal !== false || d.health !== null
+  return d.port !== null || d.browser !== false || d.health !== null
 }
 
 export function resolveEnv(env: Record<string, string>, urls: Map<string, string | null>): Record<string, string> {

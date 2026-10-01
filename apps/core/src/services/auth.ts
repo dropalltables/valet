@@ -4,13 +4,13 @@ import { timingSafeEqualStrings, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
 import { authState } from '../db/schema.js'
 
-export const PORTAL_COOKIE = 'valet_portal'
+export const SERVICE_COOKIE = 'valet_service'
 const OWNER_COOKIE_MAX_AGE_S = 30 * 24 * 3600
 const STATE_ROW_ID = 'default'
 export const OWNER_TOKEN_TTL_MS = 60_000
 
-/** Who a portal request comes from: the signed-in user, or someone holding a share link. */
-export type PortalGrant = 'owner' | 'guest'
+/** Who a service request comes from: the signed-in user, or someone holding a share link. */
+export type ServiceGrant = 'owner' | 'guest'
 /** What a token confers: `owner` tokens come from a session, `share` tokens from a share link. */
 export type TokenScope = 'owner' | 'share'
 
@@ -18,7 +18,7 @@ export type TokenScope = 'owner' | 'share'
  * One-time token carried in `/__valet/auth?token=`: AES-GCM over this JSON, so it
  * is both unforgeable and opaque. `g` is the share generation for `share` tokens.
  */
-export type PortalToken = {
+export type ServiceToken = {
   v: 1
   t: string
   p: number
@@ -31,16 +31,16 @@ export type PortalToken = {
 }
 
 /**
- * Portal hosts are separate cookie jars, so every host gets its own HMAC-bound
+ * Service hosts are separate cookie jars, so every host gets its own HMAC-bound
  * cookie. Owner cookies embed a generation that `revokeOwners()` bumps on logout;
  * share cookies embed the per-port share generation.
  */
-export class PortalAuth {
+export class ServiceAuth {
   private ownerGeneration = 0
 
   constructor(
     private readonly cipher: Cipher,
-    /** False when VALET_PASSWORD is unset: every portal is open, like the UI. */
+    /** False when VALET_PASSWORD is unset: every service is open, like the UI. */
     readonly enabled: boolean,
     private readonly db: Db,
   ) {}
@@ -48,28 +48,28 @@ export class PortalAuth {
   /** Reads the owner generation; must run before the first request. */
   async load(): Promise<void> {
     const [row] = await this.db.select().from(authState).where(eq(authState.id, STATE_ROW_ID))
-    this.ownerGeneration = row?.portalOwnerGeneration ?? 0
+    this.ownerGeneration = row?.serviceOwnerGeneration ?? 0
   }
 
-  /** Every owner cookie issued so far stops working; the next portal visit signs in again through the main host. */
+  /** Every owner cookie issued so far stops working; the next service visit signs in again through the main host. */
   async revokeOwners(): Promise<void> {
     const [row] = await this.db
       .insert(authState)
-      .values({ id: STATE_ROW_ID, portalOwnerGeneration: 1 })
-      .onConflictDoUpdate({ target: authState.id, set: { portalOwnerGeneration: sql`${authState.portalOwnerGeneration} + 1` } })
+      .values({ id: STATE_ROW_ID, serviceOwnerGeneration: 1 })
+      .onConflictDoUpdate({ target: authState.id, set: { serviceOwnerGeneration: sql`${authState.serviceOwnerGeneration} + 1` } })
       .returning()
-    if (row) this.ownerGeneration = row.portalOwnerGeneration
+    if (row) this.ownerGeneration = row.serviceOwnerGeneration
   }
 
-  mint(token: PortalToken): string {
+  mint(token: ServiceToken): string {
     return Buffer.from(this.cipher.encryptJson(token), 'base64').toString('base64url')
   }
 
   /** Null when tampered, malformed, or expired. */
-  read(raw: string): PortalToken | null {
-    let token: PortalToken
+  read(raw: string): ServiceToken | null {
+    let token: ServiceToken
     try {
-      token = this.cipher.decryptJson<PortalToken>(Buffer.from(raw, 'base64url').toString('base64'))
+      token = this.cipher.decryptJson<ServiceToken>(Buffer.from(raw, 'base64url').toString('base64'))
     } catch {
       return null
     }
@@ -80,26 +80,26 @@ export class PortalAuth {
   }
 
   private ownerValue(host: string, generation: number): string {
-    return `o.${generation}.${this.cipher.hmacHex(`valet-portal-owner-v2:${host.toLowerCase()}:${generation}`)}`
+    return `o.${generation}.${this.cipher.hmacHex(`valet-service-owner-v2:${host.toLowerCase()}:${generation}`)}`
   }
 
   private shareValue(host: string, generation: number, exp: number): string {
-    return `s.${generation}.${exp}.${this.cipher.hmacHex(`valet-portal-share-v1:${host.toLowerCase()}:${generation}:${exp}`)}`
+    return `s.${generation}.${exp}.${this.cipher.hmacHex(`valet-service-share-v1:${host.toLowerCase()}:${generation}:${exp}`)}`
   }
 
   /** Cookie to set on `host` for a validated token. Share cookies expire with the link. */
-  cookie(host: string, token: PortalToken): { value: string; maxAge: number } {
+  cookie(host: string, token: ServiceToken): { value: string; maxAge: number } {
     if (token.s === 'owner') return { value: this.ownerValue(host, this.ownerGeneration), maxAge: OWNER_COOKIE_MAX_AGE_S }
     return { value: this.shareValue(host, token.g, token.exp), maxAge: Math.max(1, Math.ceil((token.exp - Date.now()) / 1000)) }
   }
 
   /**
-   * Who the request's `valet_portal` cookie identifies, or null when it is missing,
+   * Who the request's `valet_service` cookie identifies, or null when it is missing,
    * forged, expired, or from a revoked owner or share generation.
    */
-  grant(cookieHeader: string | undefined, host: string, currentGeneration: number): PortalGrant | null {
+  grant(cookieHeader: string | undefined, host: string, currentGeneration: number): ServiceGrant | null {
     if (!this.enabled) return 'owner'
-    const value = parseCookie(cookieHeader)[PORTAL_COOKIE]
+    const value = parseCookie(cookieHeader)[SERVICE_COOKIE]
     if (!value) return null
     const owner = /^o\.(\d+)\./.exec(value)
     if (owner) {

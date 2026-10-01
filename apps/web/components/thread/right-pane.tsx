@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { useState } from 'react'
-import { LIVE_STATUSES, type Portal, type Project, type Service, type ThreadListItem } from '@valet/shared'
+import { LIVE_STATUSES, type Service, type Project, type ManagedService, type ThreadListItem } from '@valet/shared'
 import { api } from '@/lib/api'
 import { serviceRowCount } from '@/lib/stream'
 import { Badge } from '@/components/ui/badge'
@@ -21,16 +21,16 @@ export type RightPaneTab = 'changes' | 'services' | 'files' | 'terminal' | 'desk
 export function RightPane({
   thread,
   actions,
-  portals,
   services,
+  managed,
   tab,
   onTabChange,
 }: {
   thread: ThreadListItem
   project: Project | undefined
   actions: ThreadActions
-  portals: Portal[]
   services: Service[]
+  managed: ManagedService[]
   tab: RightPaneTab
   onTabChange: (tab: RightPaneTab) => void
 }) {
@@ -38,7 +38,7 @@ export function RightPane({
   // visit and then stay mounted (hidden) to keep their sessions across switches.
   const [visited, setVisited] = useState<ReadonlySet<RightPaneTab>>(() => new Set([tab]))
   const live = LIVE_STATUSES.includes(thread.status)
-  const rows = serviceRowCount(services, portals)
+  const rows = serviceRowCount(services, managed)
 
   function select(next: string): void {
     const t = next as RightPaneTab
@@ -74,7 +74,7 @@ export function RightPane({
         <ChangesPanel status={thread.status} source={thread.id} load={() => api.threads.changes(thread.id)} actions={actions} />
       </TabsContent>
       <TabsContent value="services" className="min-h-0 flex-1">
-        <ServicesPanel thread={thread} services={services} portals={portals} actions={actions} />
+        <ServicesPanel thread={thread} services={services} managed={managed} actions={actions} />
       </TabsContent>
       <TabsContent value="files" className="min-h-0 flex-1">
         <FilesPanel thread={thread} actions={actions} />

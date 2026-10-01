@@ -5,15 +5,15 @@ import { ChevronRightIcon } from 'lucide-react'
 import {
   LIVE_STATUSES,
   SANDBOX,
-  SERVICE_NAME_RE,
+  MANAGED_SERVICE_NAME_RE,
   SHARE_HOURS,
-  type CreateServiceRequest,
-  type Portal,
+  type CreateManagedServiceRequest,
   type Service,
-  type ServiceLogsFrame,
-  type ServiceReadiness,
+  type ManagedService,
+  type ManagedServiceLogsFrame,
+  type ManagedServiceReadiness,
   type ShareHours,
-  type SharePortalResponse,
+  type ShareServiceResponse,
   type ThreadListItem,
 } from '@valet/shared'
 import { toast } from 'sonner'
@@ -52,7 +52,7 @@ const LOG_TAIL_STEP = 500
 /** Bytes of decoded log text kept in memory per open tail. */
 const LOG_BUFFER_LIMIT = 512 * 1024
 
-function stateLabel(s: Service): string {
+function stateLabel(s: ManagedService): string {
   const code = s.lastExitCode
   switch (s.state) {
     case 'running':
@@ -75,7 +75,7 @@ function uptime(seconds: number): string {
   return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-function describeReadiness(name: string, r: ServiceReadiness, port: number | null): string {
+function describeReadiness(name: string, r: ManagedServiceReadiness, port: number | null): string {
   const where = port === null ? '' : ` on port ${port}`
   switch (r.status) {
     case 'listening':
@@ -92,17 +92,17 @@ function describeReadiness(name: string, r: ServiceReadiness, port: number | nul
 }
 
 /** What the mini-browser and Share need for any row with a port. */
-type Target = Portal & { title: string }
+type Target = Service & { title: string }
 
 export function ServicesPanel({
   thread,
   services,
-  portals,
+  managed,
   actions,
 }: {
   thread: ThreadListItem
   services: Service[]
-  portals: Portal[]
+  managed: ManagedService[]
   actions: ThreadActions
 }) {
   const live = LIVE_STATUSES.includes(thread.status)
@@ -112,17 +112,17 @@ export function ServicesPanel({
 
   if (!live) return <PaneState status={thread.status} onWake={actions.wake} waking={actions.busy === 'wake'} />
 
-  const detected = portals.filter((p) => !services.some((s) => s.port === p.port))
+  const detected = services.filter((p) => !managed.some((s) => s.port === p.port))
   const targets: Target[] = [
-    ...services.flatMap((s): Target[] => {
+    ...managed.flatMap((s): Target[] => {
       if (s.port === null || s.url === null) return []
-      const portal = portals.find((p) => p.port === s.port)
-      return [{ port: s.port, name: s.name, process: null, url: s.url, shareExpiresAt: portal?.shareExpiresAt ?? null, title: s.portal === false ? s.name : s.portal.title }]
+      const service = services.find((p) => p.port === s.port)
+      return [{ port: s.port, name: s.name, process: null, url: s.url, shareExpiresAt: service?.shareExpiresAt ?? null, title: s.browser === false ? s.name : s.browser.title }]
     }),
     ...detected.map((p): Target => ({ ...p, title: p.name ?? p.process ?? `Port ${p.port}` })),
   ]
   const selected = targets.find((t) => t.port === selectedPort) ?? null
-  const empty = services.length === 0 && detected.length === 0
+  const empty = managed.length === 0 && detected.length === 0
 
   return (
     <div className="flex h-full flex-col">
@@ -135,10 +135,10 @@ export function ServicesPanel({
         </div>
         {adding && <AddServiceForm threadId={thread.id} onDone={() => setAdding(false)} />}
         {empty && !adding && <p className="p-4 text-sm text-muted-foreground">No services</p>}
-        {services.length > 0 && (
+        {managed.length > 0 && (
           <ul className="flex flex-col">
-            {services.map((s) => (
-              <ServiceRow
+            {managed.map((s) => (
+              <ManagedServiceRow
                 key={s.name}
                 threadId={thread.id}
                 service={s}
@@ -159,19 +159,19 @@ export function ServicesPanel({
             <CollapsibleContent>
               <ul className="flex flex-col">
                 {detected.map((p) => (
-                  <PortalRow key={p.port} threadId={thread.id} portal={p} selected={p.port === selectedPort} onSelect={() => setSelectedPort(p.port)} />
+                  <ServiceRow key={p.port} threadId={thread.id} service={p} selected={p.port === selectedPort} onSelect={() => setSelectedPort(p.port)} />
                 ))}
               </ul>
             </CollapsibleContent>
           </Collapsible>
         )}
       </div>
-      {selected && <MiniBrowser key={selected.port} threadId={thread.id} portal={selected} />}
+      {selected && <MiniBrowser key={selected.port} threadId={thread.id} service={selected} />}
     </div>
   )
 }
 
-function PortalActions({ threadId, target }: { threadId: string; target: Target }) {
+function ServiceActions({ threadId, target }: { threadId: string; target: Target }) {
   return (
     <>
       <Button asChild size="xs" variant="ghost">
@@ -182,12 +182,12 @@ function PortalActions({ threadId, target }: { threadId: string; target: Target 
       <Button size="xs" variant="ghost" onClick={() => void copy(target.url)}>
         Copy URL
       </Button>
-      <SharePopover threadId={threadId} portal={target} />
+      <SharePopover threadId={threadId} service={target} />
     </>
   )
 }
 
-function ServiceRow({
+function ManagedServiceRow({
   threadId,
   service,
   target,
@@ -195,7 +195,7 @@ function ServiceRow({
   onSelect,
 }: {
   threadId: string
-  service: Service
+  service: ManagedService
   target: Target | null
   selected: boolean
   onSelect: () => void
@@ -208,7 +208,7 @@ function ServiceRow({
   async function run(action: 'start' | 'stop' | 'restart'): Promise<void> {
     setBusy(action)
     try {
-      const { service: after, readiness } = await api.threads.services.action(threadId, service.name, action)
+      const { service: after, readiness } = await api.threads.managedServices.action(threadId, service.name, action)
       if (action === 'stop') return
       const message = describeReadiness(after.name, readiness, after.port)
       if (readiness.ok) toast.success(message)
@@ -223,7 +223,7 @@ function ServiceRow({
   async function remove(): Promise<void> {
     setBusy('remove')
     try {
-      await api.threads.services.remove(threadId, service.name)
+      await api.threads.managedServices.remove(threadId, service.name)
     } catch (err) {
       toast.error(errorMessage(err))
     } finally {
@@ -276,7 +276,7 @@ function ServiceRow({
               up {uptime(service.uptimeSeconds ?? 0)}, {service.restarts} {service.restarts === 1 ? 'restart' : 'restarts'}
             </span>
           )}
-          {target && <PortalActions threadId={threadId} target={target} />}
+          {target && <ServiceActions threadId={threadId} target={target} />}
         </div>
       )}
       {logsOpen && <ServiceLogs threadId={threadId} name={service.name} />}
@@ -318,9 +318,9 @@ function ServiceLogs({ threadId, name }: { threadId: string; name: string }) {
     setText('')
     setClosed(false)
     const decoder = new TextDecoder()
-    const ws = new WebSocket(wsUrl(`/api/threads/${threadId}/services/${encodeURIComponent(name)}/logs?lines=${lines}`))
+    const ws = new WebSocket(wsUrl(`/api/threads/${threadId}/managed-services/${encodeURIComponent(name)}/logs?lines=${lines}`))
     ws.onmessage = (ev) => {
-      const frame = JSON.parse(String(ev.data)) as ServiceLogsFrame
+      const frame = JSON.parse(String(ev.data)) as ManagedServiceLogsFrame
       if (frame.t !== 'data') return
       const chunk = decoder.decode(Uint8Array.from(atob(frame.data), (c) => c.charCodeAt(0)), { stream: true })
       setText((t) => {
@@ -370,10 +370,10 @@ function AddServiceForm({ threadId, onDone }: { threadId: string; onDone: () => 
   const [command, setCommand] = useState('')
   const [cwd, setCwd] = useState<string>(SANDBOX.repo)
   const [port, setPort] = useState('')
-  const [portal, setPortal] = useState(true)
+  const [browser, setBrowser] = useState(true)
   const [health, setHealth] = useState('')
   const [busy, setBusy] = useState(false)
-  const nameOk = SERVICE_NAME_RE.test(name)
+  const nameOk = MANAGED_SERVICE_NAME_RE.test(name)
   const portNumber = port.trim() === '' ? undefined : Number(port)
   const portOk = portNumber === undefined || (Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535)
   const healthOk = health.trim() === '' || health.trim().startsWith('/')
@@ -382,13 +382,13 @@ function AddServiceForm({ threadId, onDone }: { threadId: string; onDone: () => 
   async function submit(e: FormEvent): Promise<void> {
     e.preventDefault()
     if (!valid) return
-    const body: CreateServiceRequest = { name, command: command.trim(), portal }
+    const body: CreateManagedServiceRequest = { name, command: command.trim(), browser }
     if (cwd.trim() && cwd.trim() !== SANDBOX.repo) body.cwd = cwd.trim()
     if (portNumber !== undefined) body.port = portNumber
     if (health.trim()) body.health = health.trim()
     setBusy(true)
     try {
-      const { service, readiness } = await api.threads.services.create(threadId, body)
+      const { service, readiness } = await api.threads.managedServices.create(threadId, body)
       const message = describeReadiness(service.name, readiness, service.port)
       if (readiness.ok) toast.success(message)
       else toast.error(message)
@@ -410,8 +410,8 @@ function AddServiceForm({ threadId, onDone }: { threadId: string; onDone: () => 
       <Input id="svc-cwd" value={cwd} onChange={(e) => setCwd(e.target.value)} className="h-7 font-mono text-xs md:text-xs" />
       <Label htmlFor="svc-port">Port</Label>
       <Input id="svc-port" value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" aria-invalid={!portOk} className="h-7 w-28 font-mono text-xs md:text-xs" />
-      <Label htmlFor="svc-portal">Portal</Label>
-      <Switch id="svc-portal" size="sm" checked={portal} onCheckedChange={setPortal} />
+      <Label htmlFor="svc-browser">Browser</Label>
+      <Switch id="svc-browser" size="sm" checked={browser} onCheckedChange={setBrowser} />
       <Label htmlFor="svc-health">Health path</Label>
       <Input id="svc-health" value={health} onChange={(e) => setHealth(e.target.value)} aria-invalid={!healthOk} className="h-7 font-mono text-xs md:text-xs" />
       <div className="col-span-2 flex justify-end gap-1">
@@ -426,29 +426,29 @@ function AddServiceForm({ threadId, onDone }: { threadId: string; onDone: () => 
   )
 }
 
-function PortalRow({ threadId, portal, selected, onSelect }: { threadId: string; portal: Portal; selected: boolean; onSelect: () => void }) {
-  const target: Target = { ...portal, title: portal.name ?? portal.process ?? `Port ${portal.port}` }
+function ServiceRow({ threadId, service, selected, onSelect }: { threadId: string; service: Service; selected: boolean; onSelect: () => void }) {
+  const target: Target = { ...service, title: service.name ?? service.process ?? `Port ${service.port}` }
   return (
     <li className={cn('flex items-center gap-1 border-b px-2 py-1 text-xs', selected && 'bg-accent/50')}>
       <button type="button" onClick={onSelect} aria-pressed={selected} className="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left hover:text-foreground">
         <span className="min-w-0 truncate font-medium">{target.title}</span>
-        {(portal.name ?? portal.process) && <span className="shrink-0 text-muted-foreground tabular-nums">{portal.port}</span>}
-        <span className="min-w-0 shrink-[2] truncate font-mono text-muted-foreground">{portal.url}</span>
+        {(service.name ?? service.process) && <span className="shrink-0 text-muted-foreground tabular-nums">{service.port}</span>}
+        <span className="min-w-0 shrink-[2] truncate font-mono text-muted-foreground">{service.url}</span>
       </button>
-      <PortalActions threadId={threadId} target={target} />
+      <ServiceActions threadId={threadId} target={target} />
     </li>
   )
 }
 
-function SharePopover({ threadId, portal }: { threadId: string; portal: Portal }) {
-  const [link, setLink] = useState<SharePortalResponse | null>(null)
+function SharePopover({ threadId, service }: { threadId: string; service: Service }) {
+  const [link, setLink] = useState<ShareServiceResponse | null>(null)
   const [busy, setBusy] = useState(false)
-  const expiresAt = link?.expiresAt ?? portal.shareExpiresAt
+  const expiresAt = link?.expiresAt ?? service.shareExpiresAt
 
   async function share(hours: ShareHours): Promise<void> {
     setBusy(true)
     try {
-      setLink(await api.threads.sharePortal(threadId, portal.port, { hours }))
+      setLink(await api.threads.shareService(threadId, service.port, { hours }))
     } catch (err) {
       toast.error(errorMessage(err))
     } finally {
@@ -459,7 +459,7 @@ function SharePopover({ threadId, portal }: { threadId: string; portal: Portal }
   async function revoke(): Promise<void> {
     setBusy(true)
     try {
-      await api.threads.revokePortalShare(threadId, portal.port)
+      await api.threads.revokeServiceShare(threadId, service.port)
       setLink(null)
     } catch (err) {
       toast.error(errorMessage(err))
@@ -504,7 +504,7 @@ function SharePopover({ threadId, portal }: { threadId: string; portal: Portal }
   )
 }
 
-/** A path typed or pasted into the address field; full URLs on this portal's origin are reduced to their path. */
+/** A path typed or pasted into the address field; full URLs on this service's origin are reduced to their path. */
 function normalizePath(raw: string, origin: string): string {
   let value = raw.trim()
   if (value.startsWith(origin)) value = value.slice(origin.length)
@@ -512,7 +512,7 @@ function normalizePath(raw: string, origin: string): string {
   return value
 }
 
-function MiniBrowser({ threadId, portal }: { threadId: string; portal: Target }) {
+function MiniBrowser({ threadId, service }: { threadId: string; service: Target }) {
   const [history, setHistory] = useState<string[]>(['/'])
   const [index, setIndex] = useState(0)
   const [reloads, setReloads] = useState(0)
@@ -523,11 +523,11 @@ function MiniBrowser({ threadId, portal }: { threadId: string; portal: Target })
   useEffect(() => setField(path), [path])
 
   // The frame is a cross-site context, so it cannot reuse the UI session; every
-  // load starts from a URL that signs the portal host in first. Tokens are short-lived.
+  // load starts from a URL that signs the service host in first. Tokens are short-lived.
   useEffect(() => {
     let cancelled = false
     api.threads
-      .portalAuthUrl(threadId, portal.port, path)
+      .serviceAuthUrl(threadId, service.port, path)
       .then(({ url }) => {
         if (!cancelled) setFrame({ key: `${index}:${reloads}`, src: url })
       })
@@ -535,11 +535,11 @@ function MiniBrowser({ threadId, portal }: { threadId: string; portal: Target })
     return () => {
       cancelled = true
     }
-  }, [threadId, portal.port, path, index, reloads])
+  }, [threadId, service.port, path, index, reloads])
 
   function navigate(e: FormEvent): void {
     e.preventDefault()
-    const next = normalizePath(field, portal.url)
+    const next = normalizePath(field, service.url)
     setHistory((h) => [...h.slice(0, index + 1), next])
     setIndex(index + 1)
   }
@@ -560,7 +560,7 @@ function MiniBrowser({ threadId, portal }: { threadId: string; portal: Target })
           <Input value={field} onChange={(e) => setField(e.target.value)} aria-label="Path" className="h-7 font-mono text-xs md:text-xs" />
         </form>
         <Button asChild size="xs" variant="ghost" className="shrink-0">
-          <a href={`${portal.url}${path}`} target="_blank" rel="noreferrer">
+          <a href={`${service.url}${path}`} target="_blank" rel="noreferrer">
             Open external
           </a>
         </Button>
@@ -569,7 +569,7 @@ function MiniBrowser({ threadId, portal }: { threadId: string; portal: Target })
         <iframe
           key={frame.key}
           src={frame.src}
-          title={portal.title}
+          title={service.title}
           sandbox={IFRAME_SANDBOX}
           allow="clipboard-read; clipboard-write"
           className="min-h-0 w-full flex-1 bg-background"

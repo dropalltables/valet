@@ -1,6 +1,6 @@
 import { request } from 'node:http'
 import { connect } from 'node:net'
-import type { ServiceReadiness } from '@valet/shared'
+import type { ManagedServiceReadiness } from '@valet/shared'
 import { sleep } from '../process.js'
 
 const TOTAL_MS = 60_000
@@ -42,7 +42,7 @@ function httpProbe(port: number, path: string): Promise<{ status: number } | { e
  * total. Gives up early when the process is gone: waiting out the minute on a
  * unit that already failed only hides the exit code.
  */
-export async function waitReady(opts: { port: number | null; health: string | null; liveness: () => Promise<Liveness> }): Promise<ServiceReadiness> {
+export async function waitReady(opts: { port: number | null; health: string | null; liveness: () => Promise<Liveness> }): Promise<ManagedServiceReadiness> {
   if (opts.port === null) return { ok: true, status: 'skipped', httpStatus: null, error: null }
   const port = opts.port
   const deadline = Date.now() + TOTAL_MS

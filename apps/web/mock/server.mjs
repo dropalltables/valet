@@ -112,16 +112,16 @@ function thread(overrides) {
   }
 }
 
-/** @type {Map<string, {row: object, events: Array<{seq:number,event:object}>, subscribers: Set<import('ws').WebSocket>, services: object[], portals: object[]}>} */
+/** @type {Map<string, {row: object, events: Array<{seq:number,event:object}>, subscribers: Set<import('ws').WebSocket>, services: object[], services: object[]}>} */
 const threads = new Map()
 
 function addThread(row, events = []) {
-  threads.set(row.id, { row, events: [], subscribers: new Set(), sharedSubscribers: new Set(), services: [], portals: [] })
+  threads.set(row.id, { row, events: [], subscribers: new Set(), sharedSubscribers: new Set(), services: [], managedServices: [] })
   for (const e of events) appendEvent(row.id, e, { silent: true })
   return row
 }
 
-const portalUrl = (threadId, port) => `http://t-${threadId.replace(/[^a-z0-9]/g, '')}-p${port}.localhost:3100`
+const serviceUrl = (threadId, port) => `http://t-${threadId.replace(/[^a-z0-9]/g, '')}-p${port}.localhost:3100`
 
 /** A managed service as the sandbox supervisor would report it. */
 function service(threadId, overrides) {
@@ -132,8 +132,8 @@ function service(threadId, overrides) {
     command: 'npm run dev',
     cwd: '/home/valet/workspace/repo',
     port,
-    url: port === null ? null : portalUrl(threadId, port),
-    portal: port === null ? false : { path: '/', title: name },
+    url: port === null ? null : serviceUrl(threadId, port),
+    browser: port === null ? false : { path: '/', title: name },
     health: null,
     source: 'adhoc',
     state: 'running',
@@ -146,9 +146,9 @@ function service(threadId, overrides) {
   }
 }
 
-function publishServices(id) {
+function publishManagedServices(id) {
   const t = threads.get(id)
-  if (t) broadcast(t.subscribers, { t: 'services', services: t.services })
+  if (t) broadcast(t.subscribers, { t: 'managed-services', services: t.managedServices })
 }
 
 const accounts = new Map([
@@ -599,16 +599,16 @@ async function startThread(row, prompt) {
 {
   const t1 = addThread(thread({ id: 't-idle', title: 'Fix the idle timer comparison', branch: 'valet/idle-timer-fix-7f3a', permissions: 'acceptEdits', costUsd: 0.42, lastActivityAt: ago(12), createdAt: ago(45) }))
   threads.get('t-idle').diffStats = { files: 3, additions: 42, deletions: 9 }
-  threads.get('t-idle').services = [
-    service('t-idle', { name: 'web', port: 30000, command: 'bun run dev --port $PORT', source: 'yaml', health: '/healthz', portal: { path: '/', title: 'Web' } }),
+  threads.get('t-idle').managedServices = [
+    service('t-idle', { name: 'web', port: 30000, command: 'bun run dev --port $PORT', source: 'yaml', health: '/healthz', browser: { path: '/', title: 'Web' } }),
     service('t-idle', { name: 'api', port: 30001, command: 'uv run uvicorn app:app --port $PORT', state: 'starting', pid: 4310, uptimeSeconds: 1, restarts: 2 }),
     service('t-idle', { name: 'worker', command: 'bun run worker', state: 'failed', pid: null, uptimeSeconds: null, restarts: 10, lastExitCode: 1 }),
     service('t-idle', { name: 'docs', port: 30002, command: 'mkdocs serve -a 127.0.0.1:$PORT', state: 'stopped', pid: null, uptimeSeconds: null }),
   ]
-  threads.get('t-idle').portals = [
-    { port: 30000, name: 'web', process: 'bun', url: portalUrl('t-idle', 30000), shareExpiresAt: null },
-    { port: 30001, name: 'api', process: 'python3', url: portalUrl('t-idle', 30001), shareExpiresAt: null },
-    { port: 5555, name: null, process: 'node', url: portalUrl('t-idle', 5555), shareExpiresAt: null },
+  threads.get('t-idle').services = [
+    { port: 30000, name: 'web', process: 'bun', url: serviceUrl('t-idle', 30000), shareExpiresAt: null },
+    { port: 30001, name: 'api', process: 'python3', url: serviceUrl('t-idle', 30001), shareExpiresAt: null },
+    { port: 5555, name: null, process: 'node', url: serviceUrl('t-idle', 5555), shareExpiresAt: null },
   ]
   // Complete transcript, built instantly.
   const seed = async () => {
@@ -1376,39 +1376,39 @@ async function handle(req, res) {
         const truncated = p === 'README.md'
         return send(res, 200, { path: p, content, truncated, binary: false, size: truncated ? 5144 : Buffer.byteLength(content) })
       }
-      case 'portals':
-        return send(res, 200, { portals: t.portals })
-      case 'services': {
+      case 'services':
+        return send(res, 200, { services: t.services })
+      case 'managed-services': {
         const name = seg[4]
         const sub = seg[5]
         if (!LIVE.has(t.row.status)) return fail(res, 409, 'paused')
         if (!name) {
           if (method === 'POST') {
             const body = await readJson(req)
-            const port = body.port ?? (body.portal || body.health ? 30000 + t.services.length + 10 : null)
-            const created = service(id, { name: body.name, command: body.command, cwd: body.cwd ?? '/home/valet/workspace/repo', port, portal: body.portal ? { path: '/', title: body.name } : false, health: body.health ?? null, uptimeSeconds: 2, updatedAt: now() })
-            t.services = [...t.services.filter((s) => s.name !== created.name), created].sort((a, b) => a.name.localeCompare(b.name))
-            publishServices(id)
+            const port = body.port ?? (body.browser || body.health ? 30000 + t.managedServices.length + 10 : null)
+            const created = service(id, { name: body.name, command: body.command, cwd: body.cwd ?? '/home/valet/workspace/repo', port, browser: body.browser ? { path: '/', title: body.name } : false, health: body.health ?? null, uptimeSeconds: 2, updatedAt: now() })
+            t.managedServices = [...t.managedServices.filter((s) => s.name !== created.name), created].sort((a, b) => a.name.localeCompare(b.name))
+            publishManagedServices(id)
             await sleep(700)
             return send(res, 201, { service: created, readiness: port === null ? { ok: true, status: 'skipped', httpStatus: null, error: null } : { ok: true, status: 'listening', httpStatus: null, error: null } })
           }
-          return send(res, 200, { services: t.services })
+          return send(res, 200, { services: t.managedServices })
         }
-        const svc = t.services.find((s) => s.name === name)
+        const svc = t.managedServices.find((s) => s.name === name)
         if (!svc) return fail(res, 404, `no service named ${name}`)
         if (sub === 'logs') {
           res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
           return res.end(Array.from({ length: 30 }, (_, i) => `${new Date(Date.now() - (30 - i) * 1000).toISOString()} ${svc.name}: line ${i + 1}\n`).join(''))
         }
         if (method === 'DELETE') {
-          t.services = t.services.filter((s) => s.name !== name)
-          publishServices(id)
+          t.managedServices = t.managedServices.filter((s) => s.name !== name)
+          publishManagedServices(id)
           return send(res, 204)
         }
         if (method === 'POST' && (sub === 'start' || sub === 'stop' || sub === 'restart')) {
           await sleep(500)
           Object.assign(svc, sub === 'stop' ? { state: 'stopped', pid: null, uptimeSeconds: null } : { state: 'running', pid: 5000 + Math.floor(Math.random() * 100), uptimeSeconds: 1, lastExitCode: null, restarts: sub === 'restart' ? svc.restarts + 1 : svc.restarts })
-          publishServices(id)
+          publishManagedServices(id)
           const readiness = sub === 'stop' || svc.port === null ? { ok: true, status: 'skipped', httpStatus: null, error: null } : { ok: true, status: svc.health ? 'responding' : 'listening', httpStatus: svc.health ? 200 : null, error: null }
           return send(res, 200, { service: svc, readiness })
         }
@@ -1490,15 +1490,15 @@ server.on('upgrade', (req, socket, head) => {
           const since = Number(url.searchParams.get('since') ?? 0)
           for (const e of t.events) if (e.seq > since) ws.send(JSON.stringify({ t: 'event', seq: e.seq, event: e.event }))
           ws.send(JSON.stringify({ t: 'thread', thread: t.row }))
-          ws.send(JSON.stringify({ t: 'portals', portals: t.portals }))
           ws.send(JSON.stringify({ t: 'services', services: t.services }))
+          ws.send(JSON.stringify({ t: 'managed-services', services: t.managedServices }))
           ws.send(JSON.stringify({ t: 'live' }))
           t.subscribers.add(ws)
           ws.on('close', () => t.subscribers.delete(ws))
           // Uptime ticks like the real poller.
           const tick = setInterval(() => {
-            for (const s of t.services) if (s.state === 'running' && s.uptimeSeconds !== null) s.uptimeSeconds += 3
-            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'services', services: t.services }))
+            for (const s of t.managedServices) if (s.state === 'running' && s.uptimeSeconds !== null) s.uptimeSeconds += 3
+            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ t: 'managed-services', services: t.managedServices }))
           }, 3000)
           ws.on('close', () => clearInterval(tick))
           return
@@ -1532,8 +1532,8 @@ server.on('upgrade', (req, socket, head) => {
           })
           return
         }
-        case 'services': {
-          const svc = t.services.find((s) => s.name === seg[4])
+        case 'managed-services': {
+          const svc = t.managedServices.find((s) => s.name === seg[4])
           if (!svc || seg[5] !== 'logs') return ws.close(4004, 'Not found')
           const lines = Number(url.searchParams.get('lines') ?? 200)
           const frame = (text) => JSON.stringify({ t: 'data', data: Buffer.from(text, 'utf8').toString('base64') })

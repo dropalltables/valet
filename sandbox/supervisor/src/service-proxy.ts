@@ -1,6 +1,6 @@
 import { request, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { PORTAL_APP_AUTHORIZATION_HEADER, PORTAL_ERROR_HEADER } from '@valet/shared'
+import { SERVICE_APP_AUTHORIZATION_HEADER, SERVICE_ERROR_HEADER } from '@valet/shared'
 import { sendJson } from './http.js'
 
 /** Time allowed for the app to accept the connection and start answering; nothing bounds the response itself. */
@@ -17,15 +17,15 @@ const DROPPED_REQUEST_HEADERS = new Set([
   'transfer-encoding',
   'upgrade',
   'authorization',
-  PORTAL_APP_AUTHORIZATION_HEADER,
+  SERVICE_APP_AUTHORIZATION_HEADER,
 ])
 const DROPPED_RESPONSE_HEADERS = new Set(['connection', 'keep-alive', 'transfer-encoding'])
 
-export type PortalTarget = { port: number; path: string }
+export type ServiceTarget = { port: number; path: string }
 
-/** `/portal/8000/some/path?q=1` -> port 8000, path `/some/path?q=1`. Null when not a portal URL. */
-export function parsePortalUrl(rawUrl: string): PortalTarget | null {
-  const m = /^\/portal\/(\d+)(\/[^\s]*)?$/.exec(rawUrl)
+/** `/service/8000/some/path?q=1` -> port 8000, path `/some/path?q=1`. Null when not a service URL. */
+export function parseServiceUrl(rawUrl: string): ServiceTarget | null {
+  const m = /^\/service\/(\d+)(\/[^\s]*)?$/.exec(rawUrl)
   if (!m || !m[1]) return null
   const port = Number(m[1])
   if (port < 1 || port > 65535) return null
@@ -44,7 +44,7 @@ function appHeaders(incoming: IncomingHttpHeaders, port: number, upgrade: boolea
     out[key] = value
   }
   out.host = `localhost:${port}`
-  const appAuth = incoming[PORTAL_APP_AUTHORIZATION_HEADER]
+  const appAuth = incoming[SERVICE_APP_AUTHORIZATION_HEADER]
   if (typeof appAuth === 'string') out.authorization = appAuth
   if (upgrade) {
     out.connection = 'Upgrade'
@@ -59,7 +59,7 @@ function upstreamError(port: number, err: NodeJS.ErrnoException): { status: numb
   return { status: 502, message: err.message }
 }
 
-export function proxyPortalRequest(target: PortalTarget, req: IncomingMessage, res: ServerResponse): void {
+export function proxyServiceRequest(target: ServiceTarget, req: IncomingMessage, res: ServerResponse): void {
   const upstream = request({
     host: '127.0.0.1',
     port: target.port,
@@ -86,7 +86,7 @@ export function proxyPortalRequest(target: PortalTarget, req: IncomingMessage, r
       return
     }
     const { status, message } = upstreamError(target.port, err)
-    res.setHeader(PORTAL_ERROR_HEADER, String(status))
+    res.setHeader(SERVICE_ERROR_HEADER, String(status))
     sendJson(res, status, { error: message, port: target.port })
   })
   // A browser that navigates away mid-response must not leave the app writing into the void.
@@ -101,7 +101,7 @@ export function proxyPortalRequest(target: PortalTarget, req: IncomingMessage, r
  * sockets are piped. Nothing in between parses frames, so extensions and
  * subprotocols negotiate end to end.
  */
-export function proxyPortalUpgrade(target: PortalTarget, req: IncomingMessage, socket: Duplex, head: Buffer): void {
+export function proxyServiceUpgrade(target: ServiceTarget, req: IncomingMessage, socket: Duplex, head: Buffer): void {
   const upstream = request({
     host: '127.0.0.1',
     port: target.port,
@@ -111,7 +111,7 @@ export function proxyPortalUpgrade(target: PortalTarget, req: IncomingMessage, s
   })
   const connectTimer = setTimeout(() => upstream.destroy(new Error('connect timeout')), CONNECT_TIMEOUT_MS)
   const fail = (status: number, reason: string): void => {
-    if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} ${reason}\r\n${PORTAL_ERROR_HEADER}: ${status}\r\nConnection: close\r\n\r\n`)
+    if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} ${reason}\r\n${SERVICE_ERROR_HEADER}: ${status}\r\nConnection: close\r\n\r\n`)
   }
 
   upstream.on('upgrade', (up, upSocket, upHead) => {

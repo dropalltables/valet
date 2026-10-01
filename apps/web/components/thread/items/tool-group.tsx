@@ -186,7 +186,7 @@ function ToolOutputView({ tool }: { tool: ToolItem }) {
 
 const URL_RE = /https?:\/\/[^\s<>"'`)\]]+/g
 
-/** Plain text with URLs (portal links a command printed) turned into links that open in a new tab. */
+/** Plain text with URLs (service links a command printed) turned into links that open in a new tab. */
 function linkify(text: string): ReactNode[] {
   const out: ReactNode[] = []
   let last = 0

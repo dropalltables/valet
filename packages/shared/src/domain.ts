@@ -259,9 +259,9 @@ export type SandboxUsage = {
 
 /**
  * A TCP port listening inside the sandbox, reachable from the browser at `url`
- * through the portal proxy (`t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`).
+ * through the service proxy (`t-<thread>-p<port>.<VALET_SERVICE_DOMAIN>`).
  */
-export type Portal = {
+export type Service = {
   port: number
   /** From the repo's `.valet/ports.json` (`{ "3000": "web" }`) when present. */
   name: string | null
@@ -279,29 +279,29 @@ export type Portal = {
  * `.valet/services.yaml`; runs as a supervisord program inside the container and
  * comes back on its own when the sandbox wakes.
  */
-export type ServiceState = 'running' | 'starting' | 'stopped' | 'failed' | 'exited'
+export type ManagedServiceState = 'running' | 'starting' | 'stopped' | 'failed' | 'exited'
 
 /** Mini-browser intent for the port: where to land and what to call it. */
-export type ServicePortal = false | { path: string; title: string }
+export type ServiceBrowser = false | { path: string; title: string }
 
-export type Service = {
-  /** `SERVICE_NAME_RE` */
+export type ManagedService = {
+  /** `MANAGED_SERVICE_NAME_RE` */
   name: string
   /** Run by `bash -lc` in `cwd`, with `PORT` and `PUBLIC_URL` set when `port` is not null. */
   command: string
   cwd: string
-  /** Assigned when the service was created with a port, a portal, or a health path. */
+  /** Assigned when the service was created with a port, a service, or a health path. */
   port: number | null
-  /** Browser-facing origin for `port`, from `VALET_PORTAL_URL_TEMPLATE`. */
+  /** Browser-facing origin for `port`, from `VALET_SERVICE_URL_TEMPLATE`. */
   url: string | null
-  portal: ServicePortal
+  browser: ServiceBrowser
   /** HTTP path probed for readiness (2xx/3xx passes); null means a TCP connect is enough. */
   health: string | null
   /** Whether the owner's HTML pages on this port get the review widget; `review: false` turns it off. */
   review: boolean
   /** `adhoc`: `valet service start` or the UI; `yaml`: `.valet/services.yaml` via `valet services ensure`. */
   source: 'adhoc' | 'yaml'
-  state: ServiceState
+  state: ManagedServiceState
   pid: number | null
   uptimeSeconds: number | null
   /** Process starts observed since the sandbox booted, beyond the first. */
@@ -312,7 +312,7 @@ export type Service = {
 }
 
 /** How a service answered after start/restart/ensure. */
-export type ServiceReadiness = {
+export type ManagedServiceReadiness = {
   ok: boolean
   /**
    * `listening`: TCP connect succeeded; `responding`: the health path answered 2xx/3xx;
@@ -324,22 +324,22 @@ export type ServiceReadiness = {
   error: string | null
 }
 
-export const SERVICE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/
+export const MANAGED_SERVICE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/
 
-/** Portal hostnames: `t-<threadId>-p<port>.<domain>`. Thread ids are lowercase alphanumerics (see core `ids.ts`). */
-export const PORTAL_HOST_RE = /^t-([a-z0-9]+)-p(\d+)\./
+/** Service hostnames: `t-<threadId>-p<port>.<domain>`. Thread ids are lowercase alphanumerics (see core `ids.ts`). */
+export const SERVICE_HOST_RE = /^t-([a-z0-9]+)-p(\d+)\./
 
 /**
- * Domain portal hosts live under: `VALET_PORTAL_DOMAIN`, or the host[:port] of
+ * Domain service hosts live under: `VALET_SERVICE_DOMAIN`, or the host[:port] of
  * `VALET_BASE_URL`. Core and the web app must agree, so both derive it from here.
  */
-export function portalDomain(env: { VALET_PORTAL_DOMAIN?: string | undefined; VALET_BASE_URL?: string | undefined }): string {
-  const explicit = env.VALET_PORTAL_DOMAIN?.trim().toLowerCase()
+export function serviceDomain(env: { VALET_SERVICE_DOMAIN?: string | undefined; VALET_BASE_URL?: string | undefined }): string {
+  const explicit = env.VALET_SERVICE_DOMAIN?.trim().toLowerCase()
   if (explicit) return explicit
   return new URL(env.VALET_BASE_URL?.trim() || 'http://localhost:3000').host.toLowerCase()
 }
 
-export function portalHost(threadId: string, port: number, domain: string): string {
+export function serviceHost(threadId: string, port: number, domain: string): string {
   return `t-${threadId}-p${port}.${domain}`
 }
 
@@ -347,13 +347,13 @@ export function portalHost(threadId: string, port: number, domain: string): stri
  * Thread and port of a browser-facing host under `domain`, or null for any other
  * host. `host` may carry a port (`t-abc-p3000.localhost:3000`).
  */
-export function parsePortalHost(host: string, domain: string): { threadId: string; port: number } | null {
+export function parseServiceHost(host: string, domain: string): { threadId: string; port: number } | null {
   const lower = host.toLowerCase()
-  const m = PORTAL_HOST_RE.exec(lower)
+  const m = SERVICE_HOST_RE.exec(lower)
   if (!m || !m[1] || !m[2]) return null
   const port = Number(m[2])
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null
-  if (lower !== portalHost(m[1], port, domain)) return null
+  if (lower !== serviceHost(m[1], port, domain)) return null
   return { threadId: m[1], port }
 }
 
@@ -584,7 +584,7 @@ export const SANDBOX = {
   supervisorPort: 9500,
   /** VNC server port (localhost only) the supervisor relays to `/vnc`. */
   vncPort: 5901,
-  /** Optional port names for portals, committed to the repo: `{ "3000": "web", "8000": "api" }`. */
+  /** Optional port names for services, committed to the repo: `{ "3000": "web", "8000": "api" }`. */
   portsFile: '/home/valet/workspace/repo/.valet/ports.json',
   /** Declared services, committed to the repo; see `services.yaml` in the README. */
   servicesYaml: '/home/valet/workspace/repo/.valet/services.yaml',
@@ -592,7 +592,7 @@ export const SANDBOX = {
   projectMcpJson: '/home/valet/workspace/repo/.mcp.json',
   /** Valet's generated MCP servers, written 0600 at launch and passed to Claude Code as `--mcp-config`. */
   mcpConfig: '/home/valet/.valet/mcp.json',
-  /** Service registry (source of truth for supervisord units), on the home volume. */
+  /** ManagedService registry (source of truth for supervisord units), on the home volume. */
   servicesFile: '/home/valet/.valet/services.json',
   /** `<name>.log` per service, rotated by supervisord. */
   serviceLogsDir: '/home/valet/.valet/logs',

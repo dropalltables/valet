@@ -5,7 +5,7 @@ import type { ThreadService } from './service.js'
 
 /**
  * The whole credential behind an unlisted link: AES-GCM over this JSON, so it is
- * unforgeable and opaque. `k` keeps it apart from the portal tokens the same cipher
+ * unforgeable and opaque. `k` keeps it apart from the service tokens the same cipher
  * mints. There is no expiry; `g` is the thread's share generation, which `revoke()`
  * bumps, and a token whose generation is stale is dead.
  */

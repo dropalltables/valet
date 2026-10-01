@@ -12,7 +12,7 @@ import type {
   PermissionMode,
   ProjectSource,
   PullRequest,
-  Service,
+  ManagedService,
   Settings,
   ThreadStatus,
   WebhookKind,
@@ -90,12 +90,12 @@ export const mcpServerProjects = pgTable(
 /** The pull request as the API reports it, plus the head commit auto-fix last covered. */
 export type PrRow = PullRequest & { ciFixSha: string | null }
 /** A listening port as last reported by the sandbox; the URL is derived at read time. */
-export type StoredPortal = { port: number; name: string | null; process: string | null }
+export type StoredService = { port: number; name: string | null; process: string | null }
 /**
  * Share state per port (keyed by the port as a string). Tokens carry `generation`;
  * revoking bumps it, which invalidates every link and cookie issued before.
  */
-export type PortalShare = { generation: number; expiresAt: string | null }
+export type ServiceShare = { generation: number; expiresAt: string | null }
 
 export const threads = pgTable(
   'threads',
@@ -120,14 +120,14 @@ export const threads = pgTable(
     pr: jsonb('pr').$type<PrRow>(),
     costUsd: doublePrecision('cost_usd'),
     diffStats: jsonb('diff_stats').$type<DiffStats>(),
-    portals: jsonb('portals').$type<StoredPortal[]>(),
-    portalShares: jsonb('portal_shares').$type<Record<string, PortalShare>>(),
+    services: jsonb('services').$type<StoredService[]>(),
+    serviceShares: jsonb('service_shares').$type<Record<string, ServiceShare>>(),
     /** An unlisted link exists for this thread; tokens carry `share_generation`. */
     shared: boolean('shared').notNull().default(false),
     /** Bumped on revoke, which invalidates every link issued so far. */
     shareGeneration: integer('share_generation').notNull().default(0),
     /** Managed services as last reported by the sandbox supervisor; kept while paused. */
-    services: jsonb('services').$type<Service[]>(),
+    managedServices: jsonb('managed_services').$type<ManagedService[]>(),
     firstPrompt: text('first_prompt').notNull(),
     /** Set once the repo is cloned and the branch exists on the home volume. */
     repoReady: boolean('repo_ready').notNull().default(false),
@@ -216,12 +216,12 @@ export const webhooks = pgTable('webhooks', {
 })
 
 /**
- * One row. Owner portal cookies embed `portal_owner_generation`; logging out bumps
- * it, which is the only way to revoke cookies that live on the portal hosts.
+ * One row. Owner service cookies embed `service_owner_generation`; logging out bumps
+ * it, which is the only way to revoke cookies that live on the service hosts.
  */
 export const authState = pgTable('auth_state', {
   id: text('id').primaryKey(),
-  portalOwnerGeneration: integer('portal_owner_generation').notNull().default(0),
+  serviceOwnerGeneration: integer('service_owner_generation').notNull().default(0),
 })
 
 export const deviceLogins = pgTable('device_logins', {

@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { z } from 'zod'
-import { SANDBOX, servicePortalSchema } from '@valet/shared'
+import { SANDBOX, serviceBrowserSchema } from '@valet/shared'
 
 /**
  * One registered service. The registry file on the home volume is the source of
@@ -14,7 +14,7 @@ export const registryEntrySchema = z.object({
   /** The service's own variables; PORT, PUBLIC_URL, VALET_* are added at unit generation. */
   env: z.record(z.string(), z.string()),
   port: z.number().nullable(),
-  portal: servicePortalSchema,
+  browser: serviceBrowserSchema,
   health: z.string().nullable(),
   /** Defaulted so a registry written before the review widget existed still loads. */
   review: z.boolean().default(true),

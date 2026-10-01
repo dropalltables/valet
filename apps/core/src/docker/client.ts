@@ -2,7 +2,7 @@ import os from 'node:os'
 import { StringDecoder } from 'node:string_decoder'
 import Docker from 'dockerode'
 import type { SandboxImageStatus, SandboxUsage } from '@valet/shared'
-import { PORTAL_ENV, SANDBOX } from '@valet/shared'
+import { SERVICE_ENV, SANDBOX } from '@valet/shared'
 import type { Config } from '../config.js'
 import { statusOf } from '../errors.js'
 import { shortHex } from '../ids.js'
@@ -39,7 +39,7 @@ export type SandboxSpec = {
   token: string
   volume: string
   /** `http://t-<thread>-p{port}.<domain>`, exported to shells in the container. */
-  portalUrlTemplate: string
+  serviceUrlTemplate: string
 }
 
 export type ContainerState = {
@@ -429,8 +429,8 @@ export class DockerClient {
       Hostname: name,
       Env: [
         `VALET_SUPERVISOR_TOKEN=${spec.token}`,
-        `${PORTAL_ENV.threadId}=${spec.threadId}`,
-        `${PORTAL_ENV.urlTemplate}=${spec.portalUrlTemplate}`,
+        `${SERVICE_ENV.threadId}=${spec.threadId}`,
+        `${SERVICE_ENV.urlTemplate}=${spec.serviceUrlTemplate}`,
       ],
       Labels: { [LABEL_THREAD]: spec.threadId, [LABEL_PROJECT]: spec.projectId, [LABEL_MANAGED]: 'true' },
       HostConfig: {

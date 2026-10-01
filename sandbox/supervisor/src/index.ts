@@ -9,7 +9,7 @@ import { handleExec } from './exec.js'
 import { fsList, fsMkdir, fsRead, fsWrite } from './fs.js'
 import { health } from './health.js'
 import { HttpError, parseJson, readBody, sendJson } from './http.js'
-import { parsePortalUrl, proxyPortalRequest, proxyPortalUpgrade } from './portal.js'
+import { parseServiceUrl, proxyServiceRequest, proxyServiceUpgrade } from './service-proxy.js'
 import { listPorts, parseExcludePids } from './ports.js'
 import { handlePty } from './pty.js'
 import { RUN_BODY_LIMIT, parseRunRequest, runToCompletion } from './run.js'
@@ -37,7 +37,7 @@ function logRequest(via: string, method: string | undefined, url: string | undef
  */
 function allowedLocally(method: string | undefined, pathname: string): boolean {
   if (method === 'GET' && (pathname === '/health' || pathname === '/ports')) return true
-  return pathname === '/services' || pathname.startsWith('/services/')
+  return pathname === '/managed-services' || pathname.startsWith('/managed-services/')
 }
 
 async function route(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -79,10 +79,10 @@ function requestHandler(via: 'tcp' | 'socket') {
         sendJson(res, 401, { error: 'unauthorized' })
         return
       }
-      // Portal paths keep their raw form: the app decides how to decode them.
-      const portal = parsePortalUrl(req.url ?? '/')
-      if (portal) {
-        proxyPortalRequest(portal, req, res)
+      // Service paths keep their raw form: the app decides how to decode them.
+      const service = parseServiceUrl(req.url ?? '/')
+      if (service) {
+        proxyServiceRequest(service, req, res)
         return
       }
     }
@@ -128,9 +128,9 @@ function upgradeHandler(via: 'tcp' | 'socket') {
         done(401)
         return
       }
-      const portal = parsePortalUrl(req.url ?? '/')
-      if (portal) {
-        proxyPortalUpgrade(portal, req, socket, head)
+      const service = parseServiceUrl(req.url ?? '/')
+      if (service) {
+        proxyServiceUpgrade(service, req, socket, head)
         socket.once('close', () => done(101))
         return
       }
@@ -181,7 +181,7 @@ function upgradeHandler(via: 'tcp' | 'socket') {
             if (!accept(sockets.vnc, (ws) => relayVnc(ws, vnc))) vnc.destroy()
           },
           () => {
-            rejectUpgrade(socket, 503, 'Service Unavailable')
+            rejectUpgrade(socket, 503, 'ManagedService Unavailable')
             done(503)
           },
         )

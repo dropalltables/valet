@@ -14,9 +14,9 @@ import { Cipher, timingSafeEqualStrings } from '../src/crypto.js'
 import { ACCOUNT_NOUNS, randomAccountName } from '../src/credentials/names.js'
 import { diedOfMemory, isLocallyBuilt, reposVolumeName, soleNetworkName, toUsage } from '../src/docker/client.js'
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
-import { servicesReplySchema } from '@valet/shared'
+import { managedServicesReplySchema } from '@valet/shared'
 import { parseGitHubUrl } from '../src/git/github.js'
-import { MAX_HTML_BYTES, allowInjectedScript, decodeHtml, injectWidget, injectionPoint, isInjectableHtml, reviewMessage } from '../src/portals/review.js'
+import { MAX_HTML_BYTES, allowInjectedScript, decodeHtml, injectWidget, injectionPoint, isInjectableHtml, reviewMessage } from '../src/services/review.js'
 import { titleFromPrompt } from '../src/threads/mapper.js'
 import type { GitRunner } from '../src/git/changes.js'
 import { readSnapshotKey, snapshotKey, snapshotKeyPaths, type SnapshotEntry } from '../src/threads/sandbox-ops.js'
@@ -319,9 +319,9 @@ test('review widget nonce goes into the directive that governs scripts', () => {
 test('review comment message', () => {
   assert.equal(
     reviewMessage({ path: '/pricing?tab=teams', selector: 'main > section:nth-of-type(2) > h2', excerpt: 'Pay as you go', note: 'This heading is wrong' }),
-    'Portal comment on /pricing?tab=teams (main > section:nth-of-type(2) > h2): This heading is wrong\n\nElement text: Pay as you go',
+    'Service comment on /pricing?tab=teams (main > section:nth-of-type(2) > h2): This heading is wrong\n\nElement text: Pay as you go',
   )
-  assert.equal(reviewMessage({ path: '/', selector: 'img', excerpt: '', note: 'Missing alt' }), 'Portal comment on / (img): Missing alt')
+  assert.equal(reviewMessage({ path: '/', selector: 'img', excerpt: '', note: 'Missing alt' }), 'Service comment on / (img): Missing alt')
 })
 
 test('review injection only reads HTML it can decode', () => {
@@ -350,7 +350,7 @@ test('services from a supervisor without the review flag still parse', () => {
     cwd: '/repo',
     port: 3000,
     url: null,
-    portal: false,
+    browser: false,
     health: null,
     source: 'yaml',
     state: 'running',
@@ -360,7 +360,7 @@ test('services from a supervisor without the review flag still parse', () => {
     lastExitCode: null,
     updatedAt: '2026-09-07T00:00:00.000Z',
   }
-  assert.equal(servicesReplySchema.parse({ services: [legacy] }).services[0]?.review, true)
+  assert.equal(managedServicesReplySchema.parse({ services: [legacy] }).services[0]?.review, true)
 })
 
 test('randomAccountName is noun-noun-number, within the name rules', () => {

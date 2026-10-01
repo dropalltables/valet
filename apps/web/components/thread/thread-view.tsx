@@ -73,7 +73,7 @@ function ThreadBody({
         costUsd={stream.transcript.totalCostUsd || thread.costUsd}
         usage={LIVE_STATUSES.includes(thread.status) ? stream.usage : null}
         actions={actions}
-        serviceCount={serviceRowCount(stream.services, stream.portals)}
+        serviceCount={serviceRowCount(stream.services, stream.managedServices)}
         onOpenServices={() => setTab('services')}
       />
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
@@ -89,7 +89,7 @@ function ThreadBody({
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize="45" minSize="20" className="min-w-0">
-          <RightPane thread={thread} project={project} actions={actions} portals={stream.portals} services={stream.services} tab={tab} onTabChange={setTab} />
+          <RightPane thread={thread} project={project} actions={actions} services={stream.services} managed={stream.managedServices} tab={tab} onTabChange={setTab} />
         </ResizablePanel>
       </ResizablePanelGroup>
       <CreatePrDialog thread={thread} open={actions.prOpen} onOpenChange={actions.setPrOpen} onCreated={patchThread} />

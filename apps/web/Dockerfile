@@ -1,5 +1,5 @@
 # Build from the repository root: docker build -t valet-web:latest -f apps/web/Dockerfile .
-# VALET_CORE_URL, VALET_PASSWORD, VALET_BASE_URL, and VALET_PORTAL_DOMAIN are read at
+# VALET_CORE_URL, VALET_PASSWORD, VALET_BASE_URL, and VALET_SERVICE_DOMAIN are read at
 # request time (apps/web/proxy.ts), so one image serves every deployment.
 
 FROM node:24-bookworm-slim AS deps

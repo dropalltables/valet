@@ -6,12 +6,12 @@
  *
  * All request/response bodies are JSON. Errors are `{ error: string }` with a 4xx/5xx
  * status. Authentication: when `VALET_PASSWORD` is set, every route except
- * `/api/health`, `/api/auth/*`, `/api/portal-auth`, and `/api/share/*` (unlisted
+ * `/api/health`, `/api/auth/*`, `/api/service-auth`, and `/api/share/*` (unlisted
  * links, where the token is the credential) requires the `valet_session` cookie.
  *
- * Portals (see the Portals section below) are the exception to "everything under
- * `/api`": requests whose Host is `t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>` are
- * rewritten by the web app to core's `/portal/<thread>/<port><path>` and proxied
+ * Services (see the Services section below) are the exception to "everything under
+ * `/api`": requests whose Host is `t-<thread>-p<port>.<VALET_SERVICE_DOMAIN>` are
+ * rewritten by the web app to core's `/service/<thread>/<port><path>` and proxied
  * into the sandbox.
  */
 
@@ -31,19 +31,19 @@ import type {
   NotificationEvent,
   NotificationSettings,
   PermissionMode,
-  Portal,
+  Service,
   Project,
   ProjectEnvVar,
   SandboxUsage,
-  Service,
-  ServiceReadiness,
+  ManagedService,
+  ManagedServiceReadiness,
   Settings,
   Thread,
   ThreadStatus,
   WebhookKind,
 } from './domain.js'
 import type { RateLimitInfo, StoredEvent } from './events.js'
-import type { CreateServiceRequest } from './supervisor.js'
+import type { CreateManagedServiceRequest } from './supervisor.js'
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -387,7 +387,7 @@ export const SHARE_PATH = '/s'
  *
  * GET /api/share/:token -> SharedThreadResponse
  * GET /api/share/:token/changes -> ChangesResponse
- * WS  /api/share/:token/stream?since=<seq> -> StreamFrame, minus `portals`,
+ * WS  /api/share/:token/stream?since=<seq> -> StreamFrame, minus `services`,
  *     `services` and `usage` frames, with `thread.shared` in place of `thread`, and
  *     with every cost figure removed.
  *
@@ -428,68 +428,68 @@ export type SharedThreadResponse = { thread: SharedThread }
 export const GITHUB_WEBHOOK_PATH = '/api/webhooks/github'
 
 // ---------------------------------------------------------------------------
-// Portals
+// Services
 // ---------------------------------------------------------------------------
 
 /**
  * Every TCP port listening inside a running sandbox (except the supervisor and
- * VNC ports) is a portal at `${scheme}://t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`.
+ * VNC ports) is a service at `${scheme}://t-<thread>-p<port>.<VALET_SERVICE_DOMAIN>`.
  * Core polls the supervisor's `/ports` while the container runs and pushes changes
- * as `{ t: 'portals' }` stream frames.
+ * as `{ t: 'services' }` stream frames.
  *
- * GET /api/threads/:id/portals -> { portals } (the last known list while paused)
+ * GET /api/threads/:id/services -> { services } (the last known list while paused)
  */
-export type PortalsResponse = { portals: Portal[] }
+export type ServicesResponse = { services: Service[] }
 
 /**
- * POST /api/threads/:id/portals/:port/share { hours } -> { url, expiresAt }
- * `url` is `<portal origin>/__valet/auth?token=...`; opening it grants access to
- * that one portal for `hours` without a Valet login.
- * DELETE /api/threads/:id/portals/:port/share -> 204; every link issued so far for
+ * POST /api/threads/:id/services/:port/share { hours } -> { url, expiresAt }
+ * `url` is `<service origin>/__valet/auth?token=...`; opening it grants access to
+ * that one service for `hours` without a Valet login.
+ * DELETE /api/threads/:id/services/:port/share -> 204; every link issued so far for
  * the port stops working.
  */
 /**
- * GET /api/threads/:id/portals/:port/auth?path=/some/path -> { url }
- * A portal URL that signs the browser in on that host and lands on `path`
- * (`<portal origin>/__valet/auth?token=...`, valid for 60 s). The Portals tab loads
+ * GET /api/threads/:id/services/:port/auth?path=/some/path -> { url }
+ * A service URL that signs the browser in on that host and lands on `path`
+ * (`<service origin>/__valet/auth?token=...`, valid for 60 s). The Services tab loads
  * its iframe from this, because inside a cross-site frame the session cookie never
- * reaches `/api/portal-auth`. Without `VALET_PASSWORD` it is the plain portal URL.
+ * reaches `/api/service-auth`. Without `VALET_PASSWORD` it is the plain service URL.
  */
-export type PortalAuthUrlResponse = { url: string }
+export type ServiceAuthUrlResponse = { url: string }
 
 export const SHARE_HOURS = [1, 3, 24, 168] as const
 export type ShareHours = (typeof SHARE_HOURS)[number]
-export type SharePortalRequest = { hours: ShareHours }
-export type SharePortalResponse = { url: string; expiresAt: string }
+export type ShareServiceRequest = { hours: ShareHours }
+export type ShareServiceResponse = { url: string; expiresAt: string }
 
 /**
- * Portal-host routes, served by core through the web app's Host rewrite:
+ * Service-host routes, served by core through the web app's Host rewrite:
  *
- *   ANY  <portal>/*                  proxied to the app inside the sandbox
- *   GET  <portal>/__valet/auth?token= sets the `valet_portal` cookie for this host, then redirects
- *   POST <portal>/__valet/wake       wakes a paused sandbox (owner only), then redirects to /
- *   GET  <portal>/__valet/review.js  the review widget (owner only)
- *   POST <portal>/__valet/review     PortalReviewRequest -> 204 (owner only)
- *   GET  /api/portal-auth?return=<portal URL>  (main host) turns a valid `valet_session`
- *        into a short-lived token and redirects to `<portal>/__valet/auth`
+ *   ANY  <service>/*                  proxied to the app inside the sandbox
+ *   GET  <service>/__valet/auth?token= sets the `valet_service` cookie for this host, then redirects
+ *   POST <service>/__valet/wake       wakes a paused sandbox (owner only), then redirects to /
+ *   GET  <service>/__valet/review.js  the review widget (owner only)
+ *   POST <service>/__valet/review     ServiceReviewRequest -> 204 (owner only)
+ *   GET  /api/service-auth?return=<service URL>  (main host) turns a valid `valet_session`
+ *        into a short-lived token and redirects to `<service>/__valet/auth`
  *
- * With `VALET_PASSWORD` set, a portal request without a valid `valet_portal` cookie
- * is redirected to `/api/portal-auth`. Without it, portals are open like the UI.
+ * With `VALET_PASSWORD` set, a service request without a valid `valet_service` cookie
+ * is redirected to `/api/service-auth`. Without it, services are open like the UI.
  */
-export const PORTAL_AUTH_PATH = '/__valet/auth'
-export const PORTAL_WAKE_PATH = '/__valet/wake'
-export const PORTAL_REVIEW_PATH = '/__valet/review'
-export const PORTAL_REVIEW_SCRIPT_PATH = '/__valet/review.js'
+export const SERVICE_AUTH_PATH = '/__valet/auth'
+export const SERVICE_WAKE_PATH = '/__valet/wake'
+export const SERVICE_REVIEW_PATH = '/__valet/review'
+export const SERVICE_REVIEW_SCRIPT_PATH = '/__valet/review.js'
 
 /**
- * A comment made with the review widget core injects into an owner's portal pages.
+ * A comment made with the review widget core injects into an owner's service pages.
  * Core sends it to the thread as a user message (steering the running turn, else
  * queued behind it).
  */
-export type PortalReviewRequest = {
+export type ServiceReviewRequest = {
   /** CSS selector for the commented element, from the widget's DOM walk. */
   selector: string
-  /** Path inside the portal the comment was made on. */
+  /** Path inside the service the comment was made on. */
   path: string
   /** First 200 characters of the element's text. */
   excerpt: string
@@ -501,23 +501,23 @@ export type PortalReviewRequest = {
 // ---------------------------------------------------------------------------
 
 /**
- * Managed services inside the sandbox (see `Service`). Core polls the supervisor's
+ * Managed services inside the sandbox (see `ManagedService`). Core polls the supervisor's
  * `/services` alongside `/ports` while the container runs and pushes the list as
- * `{ t: 'services' }` stream frames; the last known list is kept while paused.
+ * `{ t: 'managed-services' }` stream frames; the last known list is kept while paused.
  *
- * GET    /api/threads/:id/services -> { services }
- * POST   /api/threads/:id/services CreateServiceRequest -> CreateServiceResponse (201)
- * POST   /api/threads/:id/services/:name/start|stop|restart -> CreateServiceResponse
- * DELETE /api/threads/:id/services/:name -> 204
- * GET    /api/threads/:id/services/:name/logs?lines=200 -> text/plain
- * WS     /api/threads/:id/services/:name/logs?lines=200 -> ServiceLogsFrame (relayed)
+ * GET    /api/threads/:id/managed-services -> { services }
+ * POST   /api/threads/:id/managed-services CreateManagedServiceRequest -> CreateManagedServiceResponse (201)
+ * POST   /api/threads/:id/managed-services/:name/start|stop|restart -> CreateManagedServiceResponse
+ * DELETE /api/threads/:id/managed-services/:name -> 204
+ * GET    /api/threads/:id/managed-services/:name/logs?lines=200 -> text/plain
+ * WS     /api/threads/:id/managed-services/:name/logs?lines=200 -> ManagedServiceLogsFrame (relayed)
  *
  * Everything but GET /services answers 409 `{ error: 'paused' }` while the container
  * is not running.
  */
-export type ServicesResponse = { services: Service[] }
-export type { CreateServiceRequest }
-export type CreateServiceResponse = { service: Service; readiness: ServiceReadiness }
+export type ManagedServicesResponse = { services: ManagedService[] }
+export type { CreateManagedServiceRequest }
+export type CreateManagedServiceResponse = { service: ManagedService; readiness: ManagedServiceReadiness }
 
 // ---------------------------------------------------------------------------
 // Usage
@@ -586,9 +586,9 @@ export type StreamFrame =
   /** The same row as an unlisted link sees it; sent instead of `thread` on `/api/share`. */
   | { t: 'thread.shared'; thread: SharedThread }
   /** Full current list, sent once after replay and again whenever it changes. */
-  | { t: 'portals'; portals: Portal[] }
-  /** Full current list, sent once after replay and on every poll while the sandbox runs. */
   | { t: 'services'; services: Service[] }
+  /** Full current list, sent once after replay and on every poll while the sandbox runs. */
+  | { t: 'managed-services'; services: ManagedService[] }
   /** Memory and CPU of the running container, sampled every 10 s while anyone watches. */
   | { t: 'usage'; usage: SandboxUsage }
   | { t: 'error'; message: string }

@@ -1,16 +1,16 @@
 import { WebSocket, type RawData } from 'ws'
 import {
-  createServiceReplySchema,
+  createManagedServiceReplySchema,
   ensureReplySchema,
   execServerFrameSchema,
   fsListReplySchema,
   healthReplySchema,
   portsReplySchema,
   runReplySchema,
-  servicesReplySchema,
+  managedServicesReplySchema,
   type AgentProcess,
-  type CreateServiceReply,
-  type CreateServiceRequest,
+  type CreateManagedServiceReply,
+  type CreateManagedServiceRequest,
   type EnsureReply,
   type ExecClientFrame,
   type ExecServerFrame,
@@ -20,7 +20,7 @@ import {
   type ProcessRunner,
   type RunReply,
   type RunRequest,
-  type Service,
+  type ManagedService,
   type SpawnOptions,
 } from '@valet/shared'
 import { HttpError } from '../errors.js'
@@ -131,52 +131,52 @@ export class SupervisorClient {
     return portsReplySchema.parse(await res.json())
   }
 
-  /** Where a portal request for `port` goes, with the bearer header the supervisor expects. */
-  portalTarget(port: number, pathAndQuery: string): { url: URL; headers: Record<string, string> } {
-    return { url: new URL(`/portal/${port}${pathAndQuery}`, this.baseUrl), headers: this.headers() }
+  /** Where a service request for `port` goes, with the bearer header the supervisor expects. */
+  serviceTarget(port: number, pathAndQuery: string): { url: URL; headers: Record<string, string> } {
+    return { url: new URL(`/service/${port}${pathAndQuery}`, this.baseUrl), headers: this.headers() }
   }
 
-  // ---- services ----------------------------------------------------------------------
+  // ---- managed services ----------------------------------------------------------------------
 
-  async services(): Promise<Service[]> {
-    const res = await this.expectOk(await this.request('/services', { timeoutMs: 5_000 }), 'services')
-    return servicesReplySchema.parse(await res.json()).services
+  async managedServices(): Promise<ManagedService[]> {
+    const res = await this.expectOk(await this.request('/managed-services', { timeoutMs: 5_000 }), 'services')
+    return managedServicesReplySchema.parse(await res.json()).services
   }
 
   /** Creates or replaces; resolves after readiness, which can take up to a minute. */
-  async createService(req: CreateServiceRequest): Promise<CreateServiceReply> {
+  async createManagedService(req: CreateManagedServiceRequest): Promise<CreateManagedServiceReply> {
     const res = await this.expectOk(
-      await this.request('/services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req), timeoutMs: 90_000 }),
+      await this.request('/managed-services', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req), timeoutMs: 90_000 }),
       'services',
     )
-    return createServiceReplySchema.parse(await res.json())
+    return createManagedServiceReplySchema.parse(await res.json())
   }
 
-  async serviceAction(name: string, action: 'start' | 'stop' | 'restart'): Promise<CreateServiceReply> {
+  async managedServiceAction(name: string, action: 'start' | 'stop' | 'restart'): Promise<CreateManagedServiceReply> {
     const res = await this.expectOk(
-      await this.request(`/services/${encodeURIComponent(name)}/${action}`, { method: 'POST', timeoutMs: 90_000 }),
+      await this.request(`/managed-services/${encodeURIComponent(name)}/${action}`, { method: 'POST', timeoutMs: 90_000 }),
       `services/${action}`,
     )
-    return createServiceReplySchema.parse(await res.json())
+    return createManagedServiceReplySchema.parse(await res.json())
   }
 
-  async removeService(name: string): Promise<void> {
-    await this.expectOk(await this.request(`/services/${encodeURIComponent(name)}`, { method: 'DELETE' }), 'services/remove')
+  async removeManagedService(name: string): Promise<void> {
+    await this.expectOk(await this.request(`/managed-services/${encodeURIComponent(name)}`, { method: 'DELETE' }), 'services/remove')
   }
 
-  async serviceLogs(name: string, lines: number): Promise<string> {
-    const res = await this.expectOk(await this.request(`/services/${encodeURIComponent(name)}/logs?lines=${lines}`), 'services/logs')
+  async managedServiceLogs(name: string, lines: number): Promise<string> {
+    const res = await this.expectOk(await this.request(`/managed-services/${encodeURIComponent(name)}/logs?lines=${lines}`), 'services/logs')
     return res.text()
   }
 
   async ensureServices(): Promise<EnsureReply> {
-    const res = await this.expectOk(await this.request('/services/ensure', { method: 'POST', timeoutMs: 120_000 }), 'services/ensure')
+    const res = await this.expectOk(await this.request('/managed-services/ensure', { method: 'POST', timeoutMs: 120_000 }), 'services/ensure')
     return ensureReplySchema.parse(await res.json())
   }
 
-  /** `/services/<name>/logs?lines=N` for the browser relay. */
-  serviceLogsPath(name: string, lines: number): string {
-    return `/services/${encodeURIComponent(name)}/logs?lines=${lines}`
+  /** `/managed-services/<name>/logs?lines=N` for the browser relay. */
+  managedServiceLogsPath(name: string, lines: number): string {
+    return `/managed-services/${encodeURIComponent(name)}/logs?lines=${lines}`
   }
 
   openSocket(path: string): WebSocket {

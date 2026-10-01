@@ -1,9 +1,9 @@
-import { SANDBOX, type Service } from '@valet/shared'
-import type { StoredPortal } from '../db/schema.js'
+import { SANDBOX, type ManagedService } from '@valet/shared'
+import type { StoredService } from '../db/schema.js'
 import type { SupervisorClient } from '../docker/supervisor-client.js'
 import { errorMessage, logger } from '../logger.js'
 
-const log = logger('portals')
+const log = logger('services')
 
 const POLL_MS = 3_000
 /** Re-read `.valet/ports.json` this often even when the port set is unchanged. */
@@ -14,12 +14,12 @@ const UNREACHABLE_AFTER = 3
 export type PollerHooks = {
   /** Pids whose listeners (and their children's) are the agent's own, not the project's. */
   excludePids: () => number[]
-  onPortals: (portals: StoredPortal[]) => void
+  onServices: (services: StoredService[]) => void
   /**
    * Every tick while the sandbox runs (uptime changes every time); `changed` is
    * false when only uptime moved, so the owner can skip persisting.
    */
-  onServices: (services: Service[], changed: boolean) => void
+  onManagedServices: (services: ManagedService[], changed: boolean) => void
   /** The supervisor has not answered for a while; the owner decides whether the container is gone. */
   onUnreachable: () => void
 }
@@ -41,15 +41,15 @@ function parseNames(raw: Buffer | null): Record<string, string> {
 
 /**
  * Asks the supervisor for listening ports and managed services every few seconds
- * while a container runs. Portals are reported whenever the list differs from the
+ * while a container runs. Services are reported whenever the list differs from the
  * last one reported; services are reported every tick (uptime ticks), flagged when
  * something other than uptime changed. The first poll always reports, so a wake
  * replaces whatever was persisted before the pause.
  */
 export class SandboxPoller {
   private stopped = false
-  private lastPortals: string | null = null
   private lastServices: string | null = null
+  private lastManagedServices: string | null = null
   private lastPortKey = ''
   private names: Record<string, string> = {}
   private polls = 0
@@ -84,10 +84,10 @@ export class SandboxPoller {
   }
 
   private async poll(): Promise<void> {
-    // /services alone failing (a container from an image without it answers 404) must not stop portal detection.
-    const [{ ports }, services] = await Promise.all([
+    // /managed-services alone failing (a container from an image without it answers 404) must not stop service detection.
+    const [{ ports }, managed] = await Promise.all([
       this.supervisor.ports(this.hooks.excludePids()),
-      this.supervisor.services().catch((err: unknown) => {
+      this.supervisor.managedServices().catch((err: unknown) => {
         log.debug('services poll failed', { id: this.threadId, message: errorMessage(err) })
         return null
       }),
@@ -100,18 +100,18 @@ export class SandboxPoller {
     this.lastPortKey = portKey
     if (this.stopped) return
 
-    // Service name first, then the committed ports.json, else nothing.
-    const portals: StoredPortal[] = ports.map((p) => ({ port: p.port, name: p.service ?? this.names[String(p.port)] ?? null, process: p.process }))
-    const portalsKey = JSON.stringify(portals)
-    if (portalsKey !== this.lastPortals) {
-      this.lastPortals = portalsKey
-      this.hooks.onPortals(portals)
+    // Managed service name first, then the committed ports.json, else nothing.
+    const services: StoredService[] = ports.map((p) => ({ port: p.port, name: p.service ?? this.names[String(p.port)] ?? null, process: p.process }))
+    const servicesKey = JSON.stringify(services)
+    if (servicesKey !== this.lastServices) {
+      this.lastServices = servicesKey
+      this.hooks.onServices(services)
     }
 
-    if (services === null) return
-    const servicesKey = JSON.stringify(services.map((s) => ({ ...s, uptimeSeconds: null })))
-    const changed = servicesKey !== this.lastServices
-    this.lastServices = servicesKey
-    this.hooks.onServices(services, changed)
+    if (managed === null) return
+    const managedKey = JSON.stringify(managed.map((s) => ({ ...s, uptimeSeconds: null })))
+    const changed = managedKey !== this.lastManagedServices
+    this.lastManagedServices = managedKey
+    this.hooks.onManagedServices(managed, changed)
   }
 }

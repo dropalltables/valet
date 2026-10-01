@@ -40,7 +40,7 @@ export class Auth {
     return this.authorizedCookieHeader(req.headers.cookie)
   }
 
-  /** Runs on every logout. Cookies on other hosts (portals) cannot be deleted from here, only revoked. */
+  /** Runs on every logout. Cookies on other hosts (services) cannot be deleted from here, only revoked. */
   onLogout(hook: () => Promise<void>): void {
     this.logoutHooks.push(hook)
   }

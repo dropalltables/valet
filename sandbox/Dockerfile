@@ -97,7 +97,7 @@ COPY sandbox/entrypoint.sh /usr/local/bin/valet-entrypoint
 COPY sandbox/xfce.sh /usr/local/bin/valet-xfce
 COPY sandbox/run-service.sh /usr/local/bin/valet-run-service
 COPY --chown=valet:valet sandbox/tmux.conf /home/valet/.tmux.conf
-# The `valet` CLI (services, portal URLs) for the agent and the user's terminal; it talks to the supervisor's control socket.
+# The `valet` CLI (services, service URLs) for the agent and the user's terminal; it talks to the supervisor's control socket.
 RUN chmod 755 /opt/valet/supervisor/cli.js && ln -s /opt/valet/supervisor/cli.js /usr/local/bin/valet
 
 ENV HOME=/home/valet \

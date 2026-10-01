@@ -1,23 +1,17 @@
 # Valet
 
-Self-hosted cloud coding agents. Valet runs Claude Code and Codex in isolated
-containers on your own server, with a web UI for launching threads, watching the
-transcript stream, reviewing diffs, using a terminal and a desktop inside the
-sandbox, and opening pull requests.
+self-hosted cursor cloud agents / amp orbs / etc
 
 ## Requirements
 
-- A Linux server (or a Mac for local use) with Docker Engine 24+ and Docker Compose v2
-  (v2.24+ for `docker-compose.prebuilt.yaml`, which uses the `!reset` tag).
-- A Claude subscription (Pro, Max, Team, or Enterprise) or an Anthropic API key, for Claude Code.
-- A ChatGPT subscription or an OpenAI API key, for Codex.
-- A GitHub personal access token, for private repositories and pull requests.
-- Optionally a GitHub App, for installation tokens and pull request webhooks.
+- linux server or mac with docker engine 24+ and compose v2
+- claude/codex sub or  anthropic/openai api key
+- github token for private repositories and pull requests (optional)
 
 ## Install
 
 ```sh
-git clone https://github.com/your-org/valet
+git clone https://github.com/dropalltables/valet
 cd valet
 cp .env.example .env
 # set POSTGRES_PASSWORD, VALET_SECRET_KEY (openssl rand -base64 32), VALET_PASSWORD
@@ -27,17 +21,10 @@ docker compose up -d --build
 
 Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup under Settings:
 
-1. **Claude Code**: run `claude setup-token` on your own machine and add the token as an
-   account. Name it however you tell them apart, or leave the name empty for a generated
-   one like `otter-harbor-4`. Anthropic's terms do not allow Valet to broker the login
-   for you; the token is yours and stays encrypted in Valet's database.
-2. **Codex**: click *Sign in with ChatGPT* (device code flow) or paste an OpenAI API key.
-
-   Each agent can have several accounts. A thread runs under one, picked when it is
-   created (Settings holds the default), and the thread header switches it between
-   turns, for when one subscription's quota runs out. Nothing switches on its own.
-3. **GitHub**: paste a personal access token with `repo` scope.
-4. **GitHub App** (optional): paste the App ID, private key, and webhook secret of a
+1. claude code: run `claude setup-token` and paste in the token into the web app
+2. codex: click *Sign in with ChatGPT* or paste an api key
+3. github: paste a personal access token with `repo` scopes
+4. (optional): paste the App ID, private key, and webhook secret of a
    GitHub App you own. Clone, push, and pull requests then use its installation tokens
    instead of the token, and its webhook drives the pull request features below. Set the
    App's webhook URL to the one Settings shows (`<VALET_BASE_URL>/api/webhooks/github`),
@@ -45,11 +32,8 @@ Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup unde
    subscribe it to `check_run`, `check_suite`, `workflow_run`, `pull_request`,
    `issue_comment`, and `pull_request_review_comment`.
 
-Adding a Claude Code or Codex account reads that agent's model list from its CLI
-(in a short-lived sandbox container); *Refresh* under the agent reads it again.
-
-To serve Valet on a domain, put a reverse proxy (Caddy, Traefik, nginx) in front of
-port 3000 and set `VALET_BASE_URL`. WebSockets must be proxied. Portals (below) are
+to serve Valet on a domain, put a reverse proxy (Caddy, Traefik, nginx) in front of
+port 3000 and set `VALET_BASE_URL`. WebSockets must be proxied. Services (below) are
 subdomains, so also point a wildcard DNS record `*.valet.example.com` at the same box
 and issue a wildcard certificate. Caddy, with the DNS-challenge module for your provider:
 
@@ -77,11 +61,11 @@ so leave `VALET_DOCKER_NETWORK` and `VALET_REPOS_VOLUME` unset.
    `ghcr.io/<owner>/`, leaving `VALET_SANDBOX_IMAGE` empty (a value there overrides
    the prefix).
 2. Environment variables: `POSTGRES_PASSWORD`, `VALET_SECRET_KEY`, `VALET_PASSWORD`,
-   `VALET_BASE_URL` (`https://valet.example.com`), `VALET_PORTAL_DOMAIN`
+   `VALET_BASE_URL` (`https://valet.example.com`), `VALET_SERVICE_DOMAIN`
    (`valet.example.com`), and `VALET_IMAGE_PREFIX` when deploying published images.
-3. Leave the domain field on `web` empty. Portals need a wildcard host, which the domain
+3. Leave the domain field on `web` empty. Services need a wildcard host, which the domain
    field cannot express, so the compose declares the Traefik router itself from
-   `VALET_PORTAL_DOMAIN`, `VALET_CERT_RESOLVER` and `VALET_PROXY_NETWORK`. Turn off "Escape
+   `VALET_SERVICE_DOMAIN`, `VALET_CERT_RESOLVER` and `VALET_PROXY_NETWORK`. Turn off "Escape
    special characters in labels" in the application's advanced settings, or Docker Compose
    never interpolates them. Coolify attaches its proxy to a network named after the
    application's UUID, not to the stack's own `valet` network, so set `VALET_PROXY_NETWORK`
@@ -175,8 +159,8 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   link at `/s/<token>`: a read-only page with the live transcript and the diff, no
   composer, no terminal or desktop, no cost, and no login. *Revoke* invalidates every
   link issued for the thread so far.
-- **Portals.** Every TCP port listening inside a running sandbox is reachable at
-  `http://t-<thread>-p<port>.localhost:3000` (or `https://t-<thread>-p<port>.<VALET_PORTAL_DOMAIN>`
+- **Service URLs.** Every TCP port listening inside a running sandbox is reachable at
+  `http://t-<thread>-p<port>.localhost:3000` (or `https://t-<thread>-p<port>.<VALET_SERVICE_DOMAIN>`
   on a server). The web app matches the hostname and forwards the whole request,
   WebSockets included, through core into the sandbox, where the supervisor connects to
   `127.0.0.1:<port>` with `Host: localhost:<port>`, so dev servers that bind to
@@ -184,16 +168,16 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
   needs configuring locally. The Services tab lists the ports (named after the
   service that owns them, else by an optional committed `.valet/ports.json`, e.g.
   `{ "3000": "web" }`) and embeds one in a mini-browser; the agent knows the URL
-  template through `VALET_PORTAL_URL_TEMPLATE`.
-  With `VALET_PASSWORD` set, a portal host gets its own cookie after a redirect
+  template through `VALET_SERVICE_URL_TEMPLATE`.
+  With `VALET_PASSWORD` set, a service host gets its own cookie after a redirect
   through the main host (logging out revokes those cookies), and *Share* issues
-  links that open one portal for 1 hour to 7 days without a login. Request bodies
-  sent to a portal are limited to 256 MB.
+  links that open one service for 1 hour to 7 days without a login. Request bodies
+  sent to a service are limited to 256 MB.
 - **Notifications.** A thread that needs input, finishes a turn, or errors notifies
   through browser push (enabled per browser under Settings) and up to five outbound
   webhooks (Slack, Discord, ntfy, or a signed JSON POST). Push needs `VALET_BASE_URL`
   on HTTPS, except on localhost.
-- **Review.** HTML pages a portal serves to you (not to share links) get a *Comment*
+- **Review.** HTML pages a service serves to you (not to share links) get a *Comment*
   button: pick an element, write a note, and it arrives in the thread as a message
   naming the page, the element's selector, and its text. Turn it off for a service
   with `review: false` in `.valet/services.yaml`, or per response with an
@@ -221,7 +205,7 @@ services:
   web:
     command: npm run dev -- --port $PORT
     cwd: apps/web            # default: the repository root
-    portal: true             # or { path: /docs, title: Docs }
+    browser: true             # or { path: /docs, title: Docs }
     health: /                # GET must answer 2xx/3xx before the service counts as ready
     review: false            # keep the Comment button out of this service's pages
   api:
@@ -233,8 +217,8 @@ services:
     command: npm run worker  # no port: PORT and PUBLIC_URL are not set
 ```
 
-A service has a port when it sets `port`, `portal`, or `health`. It runs as user
-`valet` in a login shell with the project environment, `PORT`, `PUBLIC_URL` (its portal
+A service has a port when it sets `port`, `service`, or `health`. It runs as user
+`valet` in a login shell with the project environment, `PORT`, `PUBLIC_URL` (its service
 URL), `VALET_THREAD_ID`, and `VALET_SERVICE` set; it is restarted when it exits and
 started again when the sandbox wakes. Logs go to `~/.valet/logs/<name>.log`.
 `valet services ensure` applies the file; core runs it after `.valet/setup`, and the
@@ -242,12 +226,12 @@ supervisor reconciles it again whenever the sandbox boots. Inside the sandbox th
 agent (and the Terminal tab) can also manage services ad hoc:
 
 ```sh
-valet service start web --command 'npm run dev -- --port $PORT' --portal
+valet service start web --command 'npm run dev -- --port $PORT' --browser
 valet service list
 valet service logs web -f
 valet service restart web
 valet service remove web
-valet portal 8000            # the portal URL for any port
+valet url 8000            # the service URL for any port
 ```
 
 ## Configuration
@@ -257,8 +241,8 @@ valet portal 8000            # the portal URL for any port
 | `POSTGRES_PASSWORD` | required | Database password |
 | `VALET_SECRET_KEY` | required | Encrypts stored credentials; losing it loses them |
 | `VALET_PASSWORD` | empty | UI password; empty disables authentication |
-| `VALET_BASE_URL` | `http://localhost:3000` | Public URL used in pull request bodies and portal URLs |
-| `VALET_PORTAL_DOMAIN` | host of `VALET_BASE_URL` | Portals are served at `t-<thread>-p<port>.<domain>`; needs a wildcard DNS record on a server |
+| `VALET_BASE_URL` | `http://localhost:3000` | Public URL used in pull request bodies and service URLs |
+| `VALET_SERVICE_DOMAIN` | host of `VALET_BASE_URL` | Services are served at `t-<thread>-p<port>.<domain>`; needs a wildcard DNS record on a server |
 | `VALET_BIND` | `127.0.0.1` | Host interface for the UI port |
 | `VALET_PORT` | `3000` | Host port for the UI |
 | `VALET_IMAGE_PREFIX` | empty | Registry prefix for the `valet-*` images, e.g. `ghcr.io/your-org/` |

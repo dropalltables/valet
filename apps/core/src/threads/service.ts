@@ -4,22 +4,22 @@ import {
   type AgentKind,
   CI_FIX_MAX_ATTEMPTS,
   MESSAGEABLE_STATUSES,
-  PORTAL_ENV,
+  SERVICE_ENV,
   SANDBOX,
   formatBytes,
   imageMediaType,
   slugify,
   type ChangesResponse,
   type CreatePrRequest,
-  type CreateServiceReply,
-  type CreateServiceRequest,
+  type CreateManagedServiceReply,
+  type CreateManagedServiceRequest,
   type CreateThreadRequest,
   type FileEntry,
   type FileResponse,
   type FilesResponse,
-  type Portal,
-  type SendMessageRequest,
   type Service,
+  type SendMessageRequest,
+  type ManagedService,
   type Thread,
   type ThreadEvent,
   type ThreadListItem,
@@ -34,7 +34,7 @@ import type { Config } from '../config.js'
 import type { CredentialStore } from '../credentials/store.js'
 import { randomHex, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
-import { projects, threads, type PortalShare, type ProjectRow, type StoredPortal, type ThreadRow } from '../db/schema.js'
+import { projects, threads, type ServiceShare, type ProjectRow, type StoredService, type ThreadRow } from '../db/schema.js'
 import { LABEL_THREAD, diedOfMemory, sandboxName, volumeName, type DockerClient } from '../docker/client.js'
 import { waitForSupervisor, type ExecSocket, type SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError, badRequest, conflict, notFound } from '../errors.js'
@@ -47,12 +47,12 @@ import { ciFixDecision, ciFixMessage, commentMessage, type WebhookIntent } from 
 import { newId, shortHex } from '../ids.js'
 import type { McpServerStore } from '../mcp/store.js'
 import { errorMessage, logger } from '../logger.js'
-import { SandboxPoller } from '../portals/poller.js'
-import type { PortalUrls } from '../portals/urls.js'
+import { SandboxPoller } from '../services/poller.js'
+import type { ServiceUrls } from '../services/urls.js'
 import type { ProjectService } from '../projects/service.js'
 import type { SnapshotStore } from '../projects/snapshots.js'
 import type { SettingsService } from '../settings.js'
-import { titleFromPrompt, toListItem, toPortals, toThread } from './mapper.js'
+import { titleFromPrompt, toListItem, toServices, toThread } from './mapper.js'
 import {
   cloneRepo,
   fetchBaseKey,
@@ -103,8 +103,8 @@ export type WebhookOutcome =
   | 'state-updated'
   | 'archived'
 
-/** Where a portal request for a thread should go. */
-export type PortalTarget =
+/** Where a service request for a thread should go. */
+export type ServiceTarget =
   | { kind: 'missing' }
   | { kind: 'stopped'; row: ThreadRow }
   | { kind: 'running'; row: ThreadRow; supervisor: SupervisorClient }
@@ -138,7 +138,7 @@ export type ThreadServiceDeps = {
   snapshots: SnapshotStore
   credentials: CredentialStore
   settings: SettingsService
-  portalUrls: PortalUrls
+  serviceUrls: ServiceUrls
   mcp: McpServerStore
   redactor: SecretRedactor
 }
@@ -163,7 +163,7 @@ export class ThreadService {
   private readonly snapshots: SnapshotStore
   private readonly credentials: CredentialStore
   private readonly settings: SettingsService
-  private readonly portalUrls: PortalUrls
+  private readonly serviceUrls: ServiceUrls
   private readonly mcp: McpServerStore
   private readonly redactor: SecretRedactor
 
@@ -177,7 +177,7 @@ export class ThreadService {
     this.snapshots = deps.snapshots
     this.credentials = deps.credentials
     this.settings = deps.settings
-    this.portalUrls = deps.portalUrls
+    this.serviceUrls = deps.serviceUrls
     this.mcp = deps.mcp
     this.redactor = deps.redactor
   }
@@ -271,9 +271,9 @@ export class ThreadService {
     return (level, message) => void this.events.append(id, { type: 'log', level, message, at: now() })
   }
 
-  /** Project variables plus what scripts and the agent need to print portal URLs. */
+  /** Project variables plus what scripts and the agent need to print service URLs. */
   private sandboxEnv(id: string, projectEnv: Record<string, string>): Record<string, string> {
-    return { ...projectEnv, [PORTAL_ENV.threadId]: id, [PORTAL_ENV.urlTemplate]: this.portalUrls.template(id) }
+    return { ...projectEnv, [SERVICE_ENV.threadId]: id, [SERVICE_ENV.urlTemplate]: this.serviceUrls.template(id) }
   }
 
   // ---- queries --------------------------------------------------------------------
@@ -436,8 +436,8 @@ export class ThreadService {
     if (live.sandbox) this.dropSandbox(live)
     const poller = new SandboxPoller(live.id, supervisor, {
       excludePids: () => (live.adapter?.pid == null ? [] : [live.adapter.pid]),
-      onPortals: (list) => void this.setPortals(live.id, list),
-      onServices: (list, changed) => void this.setServices(live.id, list, changed),
+      onServices: (list) => void this.setServices(live.id, list),
+      onManagedServices: (list, changed) => void this.setManagedServices(live.id, list, changed),
       onUnreachable: () => void this.checkSandbox(live.id).catch((err) => log.warn('sandbox check failed', { id: live.id, err })),
     })
     const sandbox: LiveSandbox = { containerId, supervisor, exec: null, poller }
@@ -447,7 +447,7 @@ export class ThreadService {
   }
 
   /**
-   * Called when the live supervisor stopped answering (a portal request or the port
+   * Called when the live supervisor stopped answering (a service request or the port
    * poller failed to connect). A Docker round trip decides: a running container whose
    * supervisor answers is a transient failure and keeps its handle; anything else
    * loses the handle, and a container that stopped outside pause() (daemon restart,
@@ -532,7 +532,7 @@ export class ThreadService {
         projectId: row.projectId,
         token,
         volume: row.volumeName,
-        portalUrlTemplate: this.portalUrls.template(row.id),
+        serviceUrlTemplate: this.serviceUrls.template(row.id),
       })
       await this.patch(row.id, { containerId })
       state = await this.docker.inspect(containerId)
@@ -805,7 +805,7 @@ export class ThreadService {
       systemPromptSuffix: systemPromptSuffix({
         branch: row.branch,
         baseBranch: row.baseBranch,
-        portalUrlTemplate: this.portalUrls.template(row.id),
+        serviceUrlTemplate: this.serviceUrls.template(row.id),
       }),
       onEvent: (event) => this.onAdapterEvent(live, event),
       onSessionId: (sessionId) => {
@@ -1155,85 +1155,85 @@ export class ThreadService {
     return supervisor.openSocket(`/${kind}`)
   }
 
-  // ---- services ----------------------------------------------------------------------------
+  // ---- managed services ----------------------------------------------------------------
 
   /** Persists only material changes; uptime ticks are published without a write. */
-  private async setServices(id: string, services: Service[], changed: boolean): Promise<void> {
+  private async setManagedServices(id: string, services: ManagedService[], changed: boolean): Promise<void> {
     if (!changed) {
-      this.events.publishServices(id, services)
+      this.events.publishManagedServices(id, services)
       return
     }
     try {
+      const [row] = await this.db.update(threads).set({ managedServices: services }).where(eq(threads.id, id)).returning()
+      if (row) this.events.publishManagedServices(id, row.managedServices ?? [])
+    } catch (err) {
+      log.warn('failed to store managed services', { id, err })
+    }
+  }
+
+  /** Last known managed services; the list persists while the container is paused. */
+  async managedServices(id: string): Promise<ManagedService[]> {
+    return (await this.row(id)).managedServices ?? []
+  }
+
+  private async refreshManagedServices(id: string, supervisor: SupervisorClient): Promise<void> {
+    const services = await supervisor.managedServices().catch(() => null)
+    if (services) await this.setManagedServices(id, services, true)
+  }
+
+  async createManagedService(id: string, req: CreateManagedServiceRequest): Promise<CreateManagedServiceReply> {
+    const { supervisor } = await this.requireRunning(id)
+    const reply = await supervisor.createManagedService(req)
+    await this.refreshManagedServices(id, supervisor)
+    return reply
+  }
+
+  async managedServiceAction(id: string, name: string, action: 'start' | 'stop' | 'restart'): Promise<CreateManagedServiceReply> {
+    const { supervisor } = await this.requireRunning(id)
+    const reply = await supervisor.managedServiceAction(name, action)
+    await this.refreshManagedServices(id, supervisor)
+    return reply
+  }
+
+  async removeManagedService(id: string, name: string): Promise<void> {
+    const { supervisor } = await this.requireRunning(id)
+    await supervisor.removeManagedService(name)
+    await this.refreshManagedServices(id, supervisor)
+  }
+
+  async managedServiceLogs(id: string, name: string, lines: number): Promise<string> {
+    const { supervisor } = await this.requireRunning(id)
+    return supervisor.managedServiceLogs(name, lines)
+  }
+
+  /** Upstream socket for the log tail relay; 409 when the container is not running. */
+  async openManagedServiceLogs(id: string, name: string, lines: number): Promise<WebSocket> {
+    const { supervisor } = await this.requireRunning(id)
+    return supervisor.openSocket(supervisor.managedServiceLogsPath(name, lines))
+  }
+
+  // ---- services -----------------------------------------------------------------------------
+
+  private async setServices(id: string, services: StoredService[]): Promise<void> {
+    try {
       const [row] = await this.db.update(threads).set({ services }).where(eq(threads.id, id)).returning()
-      if (row) this.events.publishServices(id, row.services ?? [])
+      if (row) this.events.publishServices(id, toServices(row, this.serviceUrls))
     } catch (err) {
       log.warn('failed to store services', { id, err })
     }
   }
 
-  /** Last known managed services; the list persists while the container is paused. */
-  async services(id: string): Promise<Service[]> {
-    return (await this.row(id)).services ?? []
-  }
-
-  private async refreshServices(id: string, supervisor: SupervisorClient): Promise<void> {
-    const services = await supervisor.services().catch(() => null)
-    if (services) await this.setServices(id, services, true)
-  }
-
-  async createService(id: string, req: CreateServiceRequest): Promise<CreateServiceReply> {
-    const { supervisor } = await this.requireRunning(id)
-    const reply = await supervisor.createService(req)
-    await this.refreshServices(id, supervisor)
-    return reply
-  }
-
-  async serviceAction(id: string, name: string, action: 'start' | 'stop' | 'restart'): Promise<CreateServiceReply> {
-    const { supervisor } = await this.requireRunning(id)
-    const reply = await supervisor.serviceAction(name, action)
-    await this.refreshServices(id, supervisor)
-    return reply
-  }
-
-  async removeService(id: string, name: string): Promise<void> {
-    const { supervisor } = await this.requireRunning(id)
-    await supervisor.removeService(name)
-    await this.refreshServices(id, supervisor)
-  }
-
-  async serviceLogs(id: string, name: string, lines: number): Promise<string> {
-    const { supervisor } = await this.requireRunning(id)
-    return supervisor.serviceLogs(name, lines)
-  }
-
-  /** Upstream socket for the log tail relay; 409 when the container is not running. */
-  async openServiceLogs(id: string, name: string, lines: number): Promise<WebSocket> {
-    const { supervisor } = await this.requireRunning(id)
-    return supervisor.openSocket(supervisor.serviceLogsPath(name, lines))
-  }
-
-  // ---- portals -----------------------------------------------------------------------------
-
-  private async setPortals(id: string, portals: StoredPortal[]): Promise<void> {
-    try {
-      const [row] = await this.db.update(threads).set({ portals }).where(eq(threads.id, id)).returning()
-      if (row) this.events.publishPortals(id, toPortals(row, this.portalUrls))
-    } catch (err) {
-      log.warn('failed to store portals', { id, err })
-    }
-  }
-
   /** Last known listening ports, with URLs; the list persists while the container is paused. */
-  async portals(id: string): Promise<Portal[]> {
-    return toPortals(await this.row(id), this.portalUrls)
+  async services(id: string): Promise<Service[]> {
+    return toServices(await this.row(id), this.serviceUrls)
   }
 
   /**
-   * Resolves a portal request. The supervisor handle attached to the live thread is
-   * trusted without a Docker round trip: portal pages fetch dozens of assets, and a
+   * Resolves a service request. The supervisor handle attached to the live thread is
+   * trusted without a Docker round trip: service pages fetch dozens of assets, and a
    * container that died since is reported by the proxy as unreachable anyway.
    */
-  async portalTarget(id: string): Promise<PortalTarget> {
+  async serviceTarget(id: string): Promise<ServiceTarget> {
     let row: ThreadRow
     try {
       row = await this.row(id)
@@ -1256,16 +1256,16 @@ export class ThreadService {
     await this.db.update(threads).set({ shared: state.shared, shareGeneration: state.generation }).where(eq(threads.id, id))
   }
 
-  async portalShare(id: string, port: number): Promise<PortalShare> {
+  async serviceShare(id: string, port: number): Promise<ServiceShare> {
     const row = await this.row(id)
-    return row.portalShares?.[String(port)] ?? { generation: 0, expiresAt: null }
+    return row.serviceShares?.[String(port)] ?? { generation: 0, expiresAt: null }
   }
 
-  async setPortalShare(id: string, port: number, share: PortalShare): Promise<void> {
+  async setServiceShare(id: string, port: number, share: ServiceShare): Promise<void> {
     const row = await this.row(id)
-    const portalShares = { ...(row.portalShares ?? {}), [String(port)]: share }
-    const [updated] = await this.db.update(threads).set({ portalShares }).where(eq(threads.id, id)).returning()
-    if (updated) this.events.publishPortals(id, toPortals(updated, this.portalUrls))
+    const serviceShares = { ...(row.serviceShares ?? {}), [String(port)]: share }
+    const [updated] = await this.db.update(threads).set({ serviceShares }).where(eq(threads.id, id)).returning()
+    if (updated) this.events.publishServices(id, toServices(updated, this.serviceUrls))
   }
 
   // ---- git: push and pull requests ---------------------------------------------------------------

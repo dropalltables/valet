@@ -19,7 +19,7 @@ function safeNext(raw: string | null): string {
   return raw && raw.startsWith('/') && !raw.startsWith('//') ? raw : '/'
 }
 
-/** `/api/*` targets (portal sign-in) are answered by core with redirects, so they need a full navigation. */
+/** `/api/*` targets (service sign-in) are answered by core with redirects, so they need a full navigation. */
 function go(router: ReturnType<typeof useRouter>, next: string): void {
   if (next.startsWith('/api/')) window.location.assign(next)
   else router.replace(next)

@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebSocket } from 'ws'
-import { createServiceRequestSchema, type ServiceLogsFrame } from '@valet/shared'
+import { createManagedServiceRequestSchema, type ManagedServiceLogsFrame } from '@valet/shared'
 import { HttpError, MiB, parseJson, readBody, sendEmpty, sendJson } from '../http.js'
 import type { ServiceManager } from './manager.js'
 
 const PATH_RE = /^\/services(?:\/([^/]+)(?:\/(start|stop|restart|logs))?)?$/
-const LOGS_RE = /^\/services\/([^/]+)\/logs$/
+const LOGS_RE = /^\/managed-services\/([^/]+)\/logs$/
 const DEFAULT_LINES = 200
 const MAX_LINES = 10_000
 
@@ -32,7 +32,7 @@ export async function routeServices(manager: ServiceManager, req: IncomingMessag
       return true
     }
     if (method === 'POST') {
-      const parsed = createServiceRequestSchema.safeParse(parseJson(await readBody(req, MiB)))
+      const parsed = createManagedServiceRequestSchema.safeParse(parseJson(await readBody(req, MiB)))
       if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '))
       sendJson(res, 201, await manager.create(parsed.data))
       return true
@@ -68,7 +68,7 @@ export async function routeServices(manager: ServiceManager, req: IncomingMessag
   return true
 }
 
-/** Service name for a `/services/:name/logs` upgrade, or null. */
+/** ManagedService name for a `/managed-services/:name/logs` upgrade, or null. */
 export function parseLogsUpgrade(url: URL): string | null {
   return LOGS_RE.exec(url.pathname)?.[1] ?? null
 }
@@ -77,7 +77,7 @@ export function parseLogsUpgrade(url: URL): string | null {
 export function tailLogs(ws: WebSocket, file: string, lines: number): void {
   const tail = spawn('tail', ['-n', String(lines), '-F', file], { stdio: ['ignore', 'pipe', 'ignore'] })
   tail.stdout.on('data', (chunk: Buffer) => {
-    const frame: ServiceLogsFrame = { t: 'data', data: chunk.toString('base64') }
+    const frame: ManagedServiceLogsFrame = { t: 'data', data: chunk.toString('base64') }
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame))
   })
   tail.once('exit', () => ws.close())

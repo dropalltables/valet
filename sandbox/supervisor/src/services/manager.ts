@@ -5,15 +5,15 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import {
-  PORTAL_ENV,
+  SERVICE_ENV,
   RESERVED_SERVICE_ENV,
   SANDBOX,
-  type CreateServiceReply,
-  type CreateServiceRequest,
+  type CreateManagedServiceReply,
+  type CreateManagedServiceRequest,
   type EnsureReply,
-  type Service,
-  type ServiceReadiness,
-  type ServiceState,
+  type ManagedService,
+  type ManagedServiceReadiness,
+  type ManagedServiceState,
 } from '@valet/shared'
 import { HttpError } from '../http.js'
 import { sleep } from '../process.js'
@@ -36,7 +36,7 @@ import {
   updateUnits,
   type ProcessInfo,
 } from './supervisord.js'
-import { normalizePortal, parseServicesYaml, resolveEnv, wantsPort, type Declared } from './yaml.js'
+import { normalizeBrowser, parseServicesYaml, resolveEnv, wantsPort, type Declared } from './yaml.js'
 
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 /** How often process starts are sampled for the restart count between requests. */
@@ -51,16 +51,16 @@ const exitFile = (service: string): string => `${SANDBOX.serviceLogsDir}/${servi
 
 const now = (): string => new Date().toISOString()
 
-type Spec = Pick<RegistryEntry, 'command' | 'cwd' | 'port' | 'env' | 'portal' | 'health' | 'review'>
+type Spec = Pick<RegistryEntry, 'command' | 'cwd' | 'port' | 'env' | 'browser' | 'health' | 'review'>
 
 function specHash(spec: Spec): string {
   const env = Object.fromEntries(Object.entries(spec.env).sort(([a], [b]) => a.localeCompare(b)))
   return createHash('sha256')
-    .update(JSON.stringify({ command: spec.command, cwd: spec.cwd, port: spec.port, env, portal: spec.portal, health: spec.health, review: spec.review }))
+    .update(JSON.stringify({ command: spec.command, cwd: spec.cwd, port: spec.port, env, browser: spec.browser, health: spec.health, review: spec.review }))
     .digest('hex')
 }
 
-function mapState(info: ProcessInfo | null): ServiceState {
+function mapState(info: ProcessInfo | null): ManagedServiceState {
   if (!info) return 'stopped'
   switch (info.state) {
     case STATE.RUNNING:
@@ -83,8 +83,8 @@ class EnsureError extends Error {}
 
 export class ServiceManager {
   private readonly registry = new Registry()
-  private readonly threadId = process.env[PORTAL_ENV.threadId] ?? null
-  private readonly urlTemplate = process.env[PORTAL_ENV.urlTemplate] ?? null
+  private readonly threadId = process.env[SERVICE_ENV.threadId] ?? null
+  private readonly urlTemplate = process.env[SERVICE_ENV.urlTemplate] ?? null
   /** Last spawn time per unit and spawns seen beyond the first, since this supervisor started. */
   private readonly spawns = new Map<string, { start: number; restarts: number }>()
   /** Mutations (unit files + `supervisorctl update`) run one at a time, after boot. */
@@ -172,7 +172,7 @@ export class ServiceManager {
     return text.trim() !== '' && Number.isInteger(code) ? code : null
   }
 
-  private async toService(e: RegistryEntry, info: ProcessInfo | null): Promise<Service> {
+  private async toService(e: RegistryEntry, info: ProcessInfo | null): Promise<ManagedService> {
     const alive = info !== null && (info.state === STATE.RUNNING || info.state === STATE.STARTING)
     return {
       name: e.name,
@@ -180,7 +180,7 @@ export class ServiceManager {
       cwd: e.cwd,
       port: e.port,
       url: this.urlFor(e.port),
-      portal: e.portal,
+      browser: e.browser,
       health: e.health,
       review: e.review,
       source: e.source,
@@ -193,7 +193,7 @@ export class ServiceManager {
     }
   }
 
-  async list(): Promise<Service[]> {
+  async list(): Promise<ManagedService[]> {
     const infos = await this.infoByUnit()
     const entries = this.registry.all().sort((a, b) => a.name.localeCompare(b.name))
     return Promise.all(entries.map((e) => this.toService(e, infos.get(unitName(e.name)) ?? null)))
@@ -205,7 +205,7 @@ export class ServiceManager {
     return e
   }
 
-  async get(name: string): Promise<Service> {
+  async get(name: string): Promise<ManagedService> {
     const e = this.entry(name)
     return this.toService(e, await processInfo(unitName(name)))
   }
@@ -228,7 +228,7 @@ export class ServiceManager {
    * agrees with it, and a command that exits at once is reported with its code
    * instead of as started.
    */
-  private async readiness(e: RegistryEntry, startError: string | null = null): Promise<ServiceReadiness> {
+  private async readiness(e: RegistryEntry, startError: string | null = null): Promise<ManagedServiceReadiness> {
     if (startError !== null) return { ok: false, status: 'exited', httpStatus: null, error: startError }
     const ready = e.port === null ? { ok: true, status: 'skipped' as const, httpStatus: null, error: null } : await waitReady({ port: e.port, health: e.health, liveness: this.liveness(e.name) })
     for (let i = 0; ready.ok && i < STARTSECS_WAIT_POLLS; i++) {
@@ -327,16 +327,16 @@ export class ServiceManager {
   // ---- operations ------------------------------------------------------------------------
 
   /** Registers (or replaces) and starts; waits for readiness outside the mutation lock. */
-  async create(req: CreateServiceRequest): Promise<CreateServiceReply> {
+  async create(req: CreateManagedServiceRequest): Promise<CreateManagedServiceReply> {
     this.validateCommand(req.command)
     const env = req.env ?? {}
     this.validateEnv(env, 'env')
     const cwd = await this.resolveCwd(req.cwd)
-    const portal = normalizePortal(req.name, req.portal)
+    const browser = normalizeBrowser(req.name, req.browser)
     const health = req.health ?? null
     const entry = await this.locked(async () => {
       const prev = this.registry.get(req.name)
-      const port = await this.assignPort(req.name, req.port ?? null, portal !== false || health !== null, new Set(this.registry.portOwners().keys()))
+      const port = await this.assignPort(req.name, req.port ?? null, browser !== false || health !== null, new Set(this.registry.portOwners().keys()))
       const stamp = now()
       const e: RegistryEntry = {
         name: req.name,
@@ -344,7 +344,7 @@ export class ServiceManager {
         cwd,
         env,
         port,
-        portal,
+        browser,
         health,
         review: true,
         source: 'adhoc',
@@ -362,24 +362,24 @@ export class ServiceManager {
   }
 
   /** Readiness first, so the returned snapshot is the state after the wait, not before it. */
-  private async reply(e: RegistryEntry, startError: string | null): Promise<CreateServiceReply> {
+  private async reply(e: RegistryEntry, startError: string | null): Promise<CreateManagedServiceReply> {
     const readiness = await this.readiness(e, startError)
     return { service: await this.get(e.name), readiness }
   }
 
-  async start(name: string): Promise<CreateServiceReply> {
+  async start(name: string): Promise<CreateManagedServiceReply> {
     const e = this.entry(name)
     const startError = await this.locked(() => this.tryStart(name))
     return this.reply(e, startError)
   }
 
-  async stop(name: string): Promise<CreateServiceReply> {
+  async stop(name: string): Promise<CreateManagedServiceReply> {
     this.entry(name)
     await this.locked(() => stopUnit(unitName(name)))
     return { service: await this.get(name), readiness: { ok: true, status: 'skipped', httpStatus: null, error: null } }
   }
 
-  async restart(name: string): Promise<CreateServiceReply> {
+  async restart(name: string): Promise<CreateManagedServiceReply> {
     const e = this.entry(name)
     const startError = await this.locked(async () => {
       await stopUnit(unitName(name))
@@ -487,7 +487,7 @@ export class ServiceManager {
       }
       const cwdInfo = await stat(d.cwd).catch(() => null)
       if (!cwdInfo?.isDirectory()) throw new EnsureError(`services.${d.name}.cwd: not a directory: ${d.cwd}`)
-      const spec: Spec = { command: d.command, cwd: d.cwd, port: ports.get(d.name) ?? null, env, portal: d.portal, health: d.health, review: d.review }
+      const spec: Spec = { command: d.command, cwd: d.cwd, port: ports.get(d.name) ?? null, env, browser: d.browser, health: d.health, review: d.review }
       const hash = specHash(spec)
       const prev = this.registry.get(d.name)
       const changed = !prev || prev.source !== 'yaml' || prev.specHash !== hash

@@ -5,16 +5,16 @@ import { getConnInfo } from '@hono/node-server/conninfo'
 import { Hono, type Context } from 'hono'
 import { setCookie } from 'hono/cookie'
 import {
-  PORTAL_APP_AUTHORIZATION_HEADER,
-  PORTAL_AUTH_PATH,
-  PORTAL_ERROR_HEADER,
-  PORTAL_REVIEW_HEADER,
-  PORTAL_REVIEW_PATH,
-  PORTAL_REVIEW_SCRIPT_PATH,
-  PORTAL_WAKE_PATH,
-  type PortalAuthUrlResponse,
+  SERVICE_APP_AUTHORIZATION_HEADER,
+  SERVICE_AUTH_PATH,
+  SERVICE_ERROR_HEADER,
+  SERVICE_REVIEW_HEADER,
+  SERVICE_REVIEW_PATH,
+  SERVICE_REVIEW_SCRIPT_PATH,
+  SERVICE_WAKE_PATH,
+  type ServiceAuthUrlResponse,
   type ShareHours,
-  type SharePortalResponse,
+  type ShareServiceResponse,
 } from '@valet/shared'
 import { z } from 'zod'
 import type { Auth } from '../auth.js'
@@ -23,7 +23,7 @@ import type { SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError } from '../errors.js'
 import { errorMessage, logger } from '../logger.js'
 import type { ThreadService } from '../threads/service.js'
-import { OWNER_TOKEN_TTL_MS, PORTAL_COOKIE, type PortalAuth, type PortalGrant } from './auth.js'
+import { OWNER_TOKEN_TTL_MS, SERVICE_COOKIE, type ServiceAuth, type ServiceGrant } from './auth.js'
 import { deniedPage, errorPage, notFoundPage, pausedPage, unavailablePage } from './pages.js'
 import {
   MAX_HTML_BYTES,
@@ -36,17 +36,17 @@ import {
   reviewMessage,
   widgetTag,
 } from './review.js'
-import type { PortalUrls } from './urls.js'
+import type { ServiceUrls } from './urls.js'
 
-const log = logger('portals')
+const log = logger('services')
 
 /** Set by the web app's Host rewrite: the hostname the browser used. */
-export const PORTAL_HOST_HEADER = 'x-valet-portal-host'
+export const SERVICE_HOST_HEADER = 'x-valet-service-host'
 const THREAD_ID_RE = /^[a-z0-9]+$/
 /** Time allowed to reach the supervisor; the app's own connect timeout lives in the supervisor. */
 const CONNECT_TIMEOUT_MS = 30_000
 
-/** `Location: http://localhost:3000/x` from an app becomes the portal serving that port. */
+/** `Location: http://localhost:3000/x` from an app becomes the service serving that port. */
 const LOOPBACK_ORIGIN_RE = /^(https?):\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::(\d+))?(?=[/?#]|$)/i
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']
 /** Statuses whose response carries no body; `new Response` throws when given one. */
@@ -59,7 +59,7 @@ const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH',
 
 type Ctx = Context<{ Bindings: HttpBindings }>
 
-export type GatewayDeps = { cfg: Config; urls: PortalUrls; portalAuth: PortalAuth; auth: Auth; threads: ThreadService }
+export type GatewayDeps = { cfg: Config; urls: ServiceUrls; serviceAuth: ServiceAuth; auth: Auth; threads: ThreadService }
 
 type Route = {
   threadId: string
@@ -67,14 +67,14 @@ type Route = {
   /** Browser-facing host, e.g. `t-abc-p3000.localhost:3000`. */
   host: string
   origin: string
-  /** Path and query inside the portal, starting with `/`. */
+  /** Path and query inside the service, starting with `/`. */
   rest: string
 }
 
-function parseRoute(threadId: string, portRaw: string, pathAndQuery: string, host: string | undefined, urls: PortalUrls): Route | null {
+function parseRoute(threadId: string, portRaw: string, pathAndQuery: string, host: string | undefined, urls: ServiceUrls): Route | null {
   const port = Number(portRaw)
   if (!THREAD_ID_RE.test(threadId) || !Number.isInteger(port) || port < 1 || port > 65535) return null
-  const prefix = `/portal/${threadId}/${port}`
+  const prefix = `/service/${threadId}/${port}`
   if (!pathAndQuery.startsWith(prefix)) return null
   const rest = pathAndQuery.slice(prefix.length) || '/'
   const h = host ?? urls.host(threadId, port)
@@ -97,17 +97,17 @@ function withoutCookie(header: string | null, name: string): string | null {
  */
 function forwardHeaders(
   incoming: Headers,
-  opts: { route: Route; grant: PortalGrant; scheme: string; clientIp: string | null; supervisor: Record<string, string> },
+  opts: { route: Route; grant: ServiceGrant; scheme: string; clientIp: string | null; supervisor: Record<string, string> },
 ): Headers {
   const h = new Headers(incoming)
   // `Expect: 100-continue` was answered at this hop by Node's server; undici and the app must not see it again.
-  for (const name of ['host', 'expect', PORTAL_HOST_HEADER, ...HOP_BY_HOP]) h.delete(name)
+  for (const name of ['host', 'expect', SERVICE_HOST_HEADER, ...HOP_BY_HOP]) h.delete(name)
   const browserAuth = h.get('authorization')
   h.delete('authorization')
-  if (browserAuth) h.set(PORTAL_APP_AUTHORIZATION_HEADER, browserAuth)
-  else h.delete(PORTAL_APP_AUTHORIZATION_HEADER)
+  if (browserAuth) h.set(SERVICE_APP_AUTHORIZATION_HEADER, browserAuth)
+  else h.delete(SERVICE_APP_AUTHORIZATION_HEADER)
   for (const [k, v] of Object.entries(opts.supervisor)) h.set(k, v)
-  const cookie = withoutCookie(h.get('cookie'), PORTAL_COOKIE)
+  const cookie = withoutCookie(h.get('cookie'), SERVICE_COOKIE)
   if (cookie) h.set('cookie', cookie)
   else h.delete('cookie')
   h.set('x-forwarded-host', opts.route.host)
@@ -118,8 +118,8 @@ function forwardHeaders(
   return h
 }
 
-/** Makes the app embeddable in the Portals tab and keeps loopback redirects inside the portal. */
-function rewriteResponseHeaders(headers: Headers, route: Route, urls: PortalUrls): void {
+/** Makes the app embeddable in the Services tab and keeps loopback redirects inside the service. */
+function rewriteResponseHeaders(headers: Headers, route: Route, urls: ServiceUrls): void {
   headers.delete('x-frame-options')
   for (const name of ['content-security-policy', 'content-security-policy-report-only']) {
     const csp = headers.get(name)
@@ -140,7 +140,7 @@ function rewriteResponseHeaders(headers: Headers, route: Route, urls: PortalUrls
       headers.set('location', origin + location.slice(m[0].length))
     }
   }
-  headers.set('x-valet-portal', '1')
+  headers.set('x-valet-service', '1')
 }
 
 function incomingToHeaders(raw: IncomingHttpHeaders): Headers {
@@ -304,23 +304,23 @@ function sendUpstream(req: ClientRequest, body: Readable | null): Promise<Incomi
 }
 
 /**
- * Portal traffic: `/portal/:threadId/:port/*` proxied into the sandbox, the cookie
- * bootstrap on the portal host, and `/api/portal-auth` on the main host.
+ * Service traffic: `/service/:threadId/:port/*` proxied into the sandbox, the cookie
+ * bootstrap on the service host, and `/api/service-auth` on the main host.
  */
-export class PortalGateway {
+export class ServiceGateway {
   constructor(private readonly deps: GatewayDeps) {}
 
   routes(): Hono<{ Bindings: HttpBindings }> {
     const app = new Hono<{ Bindings: HttpBindings }>()
-    app.get('/api/portal-auth', (c) => this.startAuth(c))
-    app.all('/portal/:threadId/:port', (c) => this.handle(c))
-    app.all('/portal/:threadId/:port/*', (c) => this.handle(c))
+    app.get('/api/service-auth', (c) => this.startAuth(c))
+    app.all('/service/:threadId/:port', (c) => this.handle(c))
+    app.all('/service/:threadId/:port/*', (c) => this.handle(c))
     return app
   }
 
   /**
    * Main host: the browser has `valet_session` here. Turns it into a one-time token
-   * for exactly the portal in `return`, so the portal host can set its own cookie.
+   * for exactly the service in `return`, so the service host can set its own cookie.
    */
   private startAuth(c: Context): Response {
     const ret = c.req.query('return') ?? ''
@@ -330,55 +330,55 @@ export class PortalGateway {
     } catch {
       return c.html(deniedPage('Invalid return URL'), 400)
     }
-    const portal = this.deps.urls.parse(target.host)
-    if (!portal || target.protocol !== `${this.deps.urls.scheme}:`) return c.html(deniedPage('Invalid return URL'), 400)
+    const service = this.deps.urls.parse(target.host)
+    if (!service || target.protocol !== `${this.deps.urls.scheme}:`) return c.html(deniedPage('Invalid return URL'), 400)
     if (!this.deps.auth.authorizedCookieHeader(c.req.header('cookie'))) {
       const login = new URL('/login', this.deps.cfg.VALET_BASE_URL)
-      login.searchParams.set('next', `/api/portal-auth?return=${encodeURIComponent(ret)}`)
+      login.searchParams.set('next', `/api/service-auth?return=${encodeURIComponent(ret)}`)
       return c.redirect(login.toString(), 302)
     }
-    const token = this.deps.portalAuth.mint({
+    const token = this.deps.serviceAuth.mint({
       v: 1,
-      t: portal.threadId,
-      p: portal.port,
+      t: service.threadId,
+      p: service.port,
       s: 'owner',
       g: 0,
       exp: Date.now() + OWNER_TOKEN_TTL_MS,
       ret: target.pathname + target.search,
     })
-    return c.redirect(`${target.origin}${PORTAL_AUTH_PATH}?token=${token}`, 302)
+    return c.redirect(`${target.origin}${SERVICE_AUTH_PATH}?token=${token}`, 302)
   }
 
   private async handle(c: Ctx): Promise<Response> {
     const url = new URL(c.req.url)
-    const route = parseRoute(c.req.param('threadId') ?? '', c.req.param('port') ?? '', url.pathname + url.search, c.req.header(PORTAL_HOST_HEADER), this.deps.urls)
+    const route = parseRoute(c.req.param('threadId') ?? '', c.req.param('port') ?? '', url.pathname + url.search, c.req.header(SERVICE_HOST_HEADER), this.deps.urls)
     if (!route) return c.html(notFoundPage(), 404)
     try {
       return await this.serve(c, route, url)
     } catch (err) {
-      log.warn('portal request failed', { id: route.threadId, port: route.port, message: errorMessage(err) })
+      log.warn('service request failed', { id: route.threadId, port: route.port, message: errorMessage(err) })
       return c.html(errorPage(errorMessage(err)), 500)
     }
   }
 
   private async serve(c: Ctx, route: Route, url: URL): Promise<Response> {
-    const target = await this.deps.threads.portalTarget(route.threadId)
+    const target = await this.deps.threads.serviceTarget(route.threadId)
     if (target.kind === 'missing') return c.html(notFoundPage(), 404)
-    const generation = target.row.portalShares?.[String(route.port)]?.generation ?? 0
+    const generation = target.row.serviceShares?.[String(route.port)]?.generation ?? 0
     const path = route.rest.split('?', 1)[0] ?? '/'
 
-    if (path === PORTAL_AUTH_PATH) {
-      const token = this.deps.portalAuth.read(url.searchParams.get('token') ?? '')
+    if (path === SERVICE_AUTH_PATH) {
+      const token = this.deps.serviceAuth.read(url.searchParams.get('token') ?? '')
       if (!token || token.t !== route.threadId || token.p !== route.port) return c.html(deniedPage('This link is invalid or has expired'), 403)
       if (token.s === 'share' && token.g !== generation) return c.html(deniedPage('This link has been revoked'), 403)
-      if (this.deps.portalAuth.enabled) {
-        const cookie = this.deps.portalAuth.cookie(route.host, token)
-        // Cross-site portal hosts (`*.localhost`) are only reachable from the Portals
+      if (this.deps.serviceAuth.enabled) {
+        const cookie = this.deps.serviceAuth.cookie(route.host, token)
+        // Cross-site service hosts (`*.localhost`) are only reachable from the Services
         // tab's iframe with a SameSite=None cookie, which must be Secure and, so that
         // third-party cookie blocking leaves it alone, Partitioned. Browsers treat
         // `*.localhost` as a secure context even over http.
         const crossSite = !this.deps.urls.sameSite
-        setCookie(c, PORTAL_COOKIE, cookie.value, {
+        setCookie(c, SERVICE_COOKIE, cookie.value, {
           httpOnly: true,
           sameSite: crossSite ? 'None' : 'Lax',
           secure: crossSite || this.deps.urls.secure,
@@ -391,25 +391,25 @@ export class PortalGateway {
       return c.redirect(ret, 302)
     }
 
-    const grant = this.deps.portalAuth.grant(c.req.header('cookie'), route.host, generation)
+    const grant = this.deps.serviceAuth.grant(c.req.header('cookie'), route.host, generation)
     if (!grant) {
-      const login = new URL('/api/portal-auth', this.deps.cfg.VALET_BASE_URL)
+      const login = new URL('/api/service-auth', this.deps.cfg.VALET_BASE_URL)
       login.searchParams.set('return', route.origin + route.rest)
       return c.redirect(login.toString(), 302)
     }
 
-    if (path === PORTAL_WAKE_PATH) {
+    if (path === SERVICE_WAKE_PATH) {
       if (c.req.method !== 'POST') return c.html(notFoundPage(), 404)
       if (grant !== 'owner') return c.html(deniedPage('Only the owner can wake this sandbox'), 403)
       await this.deps.threads.wake(route.threadId)
       return c.redirect('/', 303)
     }
 
-    if (path === PORTAL_REVIEW_SCRIPT_PATH) {
+    if (path === SERVICE_REVIEW_SCRIPT_PATH) {
       if (c.req.method !== 'GET' || grant !== 'owner') return c.html(notFoundPage(), 404)
       return new Response(REVIEW_WIDGET_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-store' } })
     }
-    if (path === PORTAL_REVIEW_PATH) {
+    if (path === SERVICE_REVIEW_PATH) {
       if (c.req.method !== 'POST') return c.html(notFoundPage(), 404)
       if (grant !== 'owner') return c.json({ error: 'only the owner can comment' }, 403)
       return this.review(c, route)
@@ -417,7 +417,7 @@ export class PortalGateway {
 
     if (target.kind === 'stopped') return c.html(pausedPage(grant === 'owner'), 503)
     // A service can keep the widget out of its own pages; anything not declared in services.yaml has it.
-    const review = grant === 'owner' && target.row.services?.find((s) => s.port === route.port)?.review !== false
+    const review = grant === 'owner' && target.row.managedServices?.find((s) => s.port === route.port)?.review !== false
     return this.proxyHttp(c, route, target.supervisor, grant, review)
   }
 
@@ -439,8 +439,8 @@ export class PortalGateway {
    * through with its Content-Length intact (undici's fetch would re-chunk it and
    * reject `Expect`), and the response streams back unbuffered for SSE.
    */
-  private async proxyHttp(c: Ctx, route: Route, supervisor: SupervisorClient, grant: PortalGrant, review: boolean): Promise<Response> {
-    const target = supervisor.portalTarget(route.port, route.rest)
+  private async proxyHttp(c: Ctx, route: Route, supervisor: SupervisorClient, grant: ServiceGrant, review: boolean): Promise<Response> {
+    const target = supervisor.serviceTarget(route.port, route.rest)
     const headers = forwardHeaders(c.req.raw.headers, {
       route,
       grant,
@@ -474,11 +474,11 @@ export class PortalGateway {
     try {
       res = await sendUpstream(upstream, method === 'GET' || method === 'HEAD' ? null : incoming)
     } catch (err) {
-      log.warn('portal upstream failed', { id: route.threadId, port: route.port, message: errorMessage(err) })
+      log.warn('service upstream failed', { id: route.threadId, port: route.port, message: errorMessage(err) })
       if (isUnreachable(err)) return this.unreachable(c, route, grant)
       return c.html(unavailablePage(route.port, 'The sandbox did not answer'), 502)
     }
-    const failure = res.headers[PORTAL_ERROR_HEADER]
+    const failure = res.headers[SERVICE_ERROR_HEADER]
     if (typeof failure === 'string') {
       const detail = await new Response(Readable.toWeb(res) as ReadableStream)
         .json()
@@ -489,8 +489,8 @@ export class PortalGateway {
     const status = res.statusCode ?? 502
     const resHeaders = responseHeaders(res)
     rewriteResponseHeaders(resHeaders, route, this.deps.urls)
-    const off = resHeaders.get(PORTAL_REVIEW_HEADER) === 'off'
-    resHeaders.delete(PORTAL_REVIEW_HEADER)
+    const off = resHeaders.get(SERVICE_REVIEW_HEADER) === 'off'
+    resHeaders.delete(SERVICE_REVIEW_HEADER)
     const bodyless = BODYLESS_STATUS.has(status) || method === 'HEAD'
     const init = { status, statusText: res.statusMessage ?? '', headers: resHeaders }
     if (!bodyless && review && !off && method === 'GET' && isInjectableHtml(resHeaders)) {
@@ -506,44 +506,44 @@ export class PortalGateway {
    * container that stopped outside pause() (which then shows the paused page and
    * its Wake button) from a supervisor that is merely down.
    */
-  private async unreachable(c: Ctx, route: Route, grant: PortalGrant): Promise<Response> {
+  private async unreachable(c: Ctx, route: Route, grant: ServiceGrant): Promise<Response> {
     await this.deps.threads.checkSandbox(route.threadId)
-    const target = await this.deps.threads.portalTarget(route.threadId)
+    const target = await this.deps.threads.serviceTarget(route.threadId)
     if (target.kind === 'missing') return c.html(notFoundPage(), 404)
     if (target.kind === 'stopped') return c.html(pausedPage(grant === 'owner'), 503)
     return c.html(unavailablePage(route.port, 'The sandbox did not answer'), 502)
   }
 
   /**
-   * WebSocket upgrades on a portal host. Bytes are tunnelled untouched to the
+   * WebSocket upgrades on a service host. Bytes are tunnelled untouched to the
    * supervisor, which does the same into the app, so any subprotocol works.
    */
   async upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, threadId: string, portRaw: string): Promise<void> {
     const reject = (status: number, reason: string): void => {
       if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`)
     }
-    const hostHeader = req.headers[PORTAL_HOST_HEADER] ?? req.headers['x-forwarded-host']
+    const hostHeader = req.headers[SERVICE_HOST_HEADER] ?? req.headers['x-forwarded-host']
     const route = parseRoute(threadId, portRaw, req.url ?? '/', typeof hostHeader === 'string' ? hostHeader : undefined, this.deps.urls)
     if (!route) {
       reject(404, 'Not Found')
       return
     }
-    const target = await this.deps.threads.portalTarget(route.threadId)
+    const target = await this.deps.threads.serviceTarget(route.threadId)
     if (target.kind === 'missing') {
       reject(404, 'Not Found')
       return
     }
-    const generation = target.row.portalShares?.[String(route.port)]?.generation ?? 0
-    const grant = this.deps.portalAuth.grant(req.headers.cookie, route.host, generation)
+    const generation = target.row.serviceShares?.[String(route.port)]?.generation ?? 0
+    const grant = this.deps.serviceAuth.grant(req.headers.cookie, route.host, generation)
     if (!grant) {
       reject(401, 'Unauthorized')
       return
     }
     if (target.kind === 'stopped') {
-      reject(503, 'Service Unavailable')
+      reject(503, 'ManagedService Unavailable')
       return
     }
-    const upstreamTarget = target.supervisor.portalTarget(route.port, route.rest)
+    const upstreamTarget = target.supervisor.serviceTarget(route.port, route.rest)
     const headers = forwardHeaders(incomingToHeaders(req.headers), {
       route,
       grant,
@@ -585,15 +585,15 @@ export class PortalGateway {
       res.pipe(socket)
     })
     upstream.on('error', (err) => {
-      log.debug('portal upgrade failed', { id: route.threadId, port: route.port, message: errorMessage(err) })
+      log.debug('service upgrade failed', { id: route.threadId, port: route.port, message: errorMessage(err) })
       if (!isUnreachable(err)) {
         reject(502, 'Bad Gateway')
         return
       }
       void this.deps.threads
         .checkSandbox(route.threadId)
-        .then(() => this.deps.threads.portalTarget(route.threadId))
-        .then((fresh) => reject(fresh.kind === 'stopped' ? 503 : 502, fresh.kind === 'stopped' ? 'Service Unavailable' : 'Bad Gateway'))
+        .then(() => this.deps.threads.serviceTarget(route.threadId))
+        .then((fresh) => reject(fresh.kind === 'stopped' ? 503 : 502, fresh.kind === 'stopped' ? 'ManagedService Unavailable' : 'Bad Gateway'))
         .catch(() => reject(502, 'Bad Gateway'))
     })
     socket.on('close', () => upstream.destroy())
@@ -602,30 +602,30 @@ export class PortalGateway {
 
   // ---- session-authenticated helpers ---------------------------------------------
 
-  /** Portal URL for an embedded frame: lands on `path` after signing this host in. */
-  async authUrl(threadId: string, port: number, path: string): Promise<PortalAuthUrlResponse> {
-    await this.deps.threads.portalShare(threadId, port)
+  /** Service URL for an embedded frame: lands on `path` after signing this host in. */
+  async authUrl(threadId: string, port: number, path: string): Promise<ServiceAuthUrlResponse> {
+    await this.deps.threads.serviceShare(threadId, port)
     const origin = this.deps.urls.origin(threadId, port)
     const ret = path.startsWith('/') && !path.startsWith('//') ? path : '/'
-    if (!this.deps.portalAuth.enabled) return { url: origin + ret }
-    const token = this.deps.portalAuth.mint({ v: 1, t: threadId, p: port, s: 'owner', g: 0, exp: Date.now() + OWNER_TOKEN_TTL_MS, ret })
-    return { url: `${origin}${PORTAL_AUTH_PATH}?token=${token}` }
+    if (!this.deps.serviceAuth.enabled) return { url: origin + ret }
+    const token = this.deps.serviceAuth.mint({ v: 1, t: threadId, p: port, s: 'owner', g: 0, exp: Date.now() + OWNER_TOKEN_TTL_MS, ret })
+    return { url: `${origin}${SERVICE_AUTH_PATH}?token=${token}` }
   }
 
   // ---- sharing --------------------------------------------------------------------
 
-  async share(threadId: string, port: number, hours: ShareHours): Promise<SharePortalResponse> {
-    const current = await this.deps.threads.portalShare(threadId, port)
+  async share(threadId: string, port: number, hours: ShareHours): Promise<ShareServiceResponse> {
+    const current = await this.deps.threads.serviceShare(threadId, port)
     const exp = Date.now() + hours * 3600_000
     const expiresAt = new Date(exp).toISOString()
-    await this.deps.threads.setPortalShare(threadId, port, { generation: current.generation, expiresAt })
-    const token = this.deps.portalAuth.mint({ v: 1, t: threadId, p: port, s: 'share', g: current.generation, exp, ret: '/' })
-    return { url: `${this.deps.urls.origin(threadId, port)}${PORTAL_AUTH_PATH}?token=${token}`, expiresAt }
+    await this.deps.threads.setServiceShare(threadId, port, { generation: current.generation, expiresAt })
+    const token = this.deps.serviceAuth.mint({ v: 1, t: threadId, p: port, s: 'share', g: current.generation, exp, ret: '/' })
+    return { url: `${this.deps.urls.origin(threadId, port)}${SERVICE_AUTH_PATH}?token=${token}`, expiresAt }
   }
 
   /** Bumps the generation: every link and cookie issued for the port so far stops working. */
   async revoke(threadId: string, port: number): Promise<void> {
-    const current = await this.deps.threads.portalShare(threadId, port)
-    await this.deps.threads.setPortalShare(threadId, port, { generation: current.generation + 1, expiresAt: null })
+    const current = await this.deps.threads.serviceShare(threadId, port)
+    await this.deps.threads.setServiceShare(threadId, port, { generation: current.generation + 1, expiresAt: null })
   }
 }
