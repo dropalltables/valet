@@ -25,7 +25,7 @@ import {
 } from '@/components/ai-elements/prompt-input'
 import { Button } from '@/components/ui/button'
 import { InputGroupTextarea } from '@/components/ui/input-group'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { SelectGroup, SelectLabel } from '@/components/ui/select'
 import { useAppData } from '@/components/app/data-provider'
 import { AttachmentStrip } from '@/components/composer/attachments'
 import { DropOverlay } from '@/components/composer/drop-overlay'
@@ -91,6 +91,21 @@ function Composer() {
     ) ??
     models[0]?.id ??
     null
+  // Every agent's models in one list; picking one sets the agent and the model together.
+  const modelsByAgent = useMemo(
+    () => agents.map((a) => ({ agent: a, models: a.models.length > 0 ? a.models : DEFAULT_MODELS[a.id] })),
+    [agents],
+  )
+  const pickModel = (value: string): void => {
+    const [nextAgent, ...rest] = value.split(':')
+    if (nextAgent !== 'claude' && nextAgent !== 'codex') return
+    if (nextAgent !== agent) {
+      setPermissions(null)
+      setAccountId(null)
+    }
+    setAgent(nextAgent)
+    setModel(rest.join(':'))
+  }
   const accounts = useMemo(() => (accountsData?.accounts ?? []).filter((a) => a.agent === agent), [accountsData, agent])
   // The pick, then the settings default, then the agent's oldest account.
   const effectiveAccount =
@@ -201,38 +216,27 @@ function Composer() {
             </PromptInputSelect>
           </PromptInputTools>
           <div className="flex min-w-0 items-center gap-2">
-            <PromptInputSelect
-              value={agent ?? ''}
-              onValueChange={(v) => {
-                setAgent(v as AgentKind)
-                setModel(null)
-                setPermissions(null)
-                setAccountId(null)
-              }}
-            >
-              <PromptInputSelectTrigger size="sm" aria-label="Agent">
-                <PromptInputSelectValue placeholder="Agent" />
+            <PromptInputSelect value={agent && effectiveModel ? `${agent}:${effectiveModel}` : ''} onValueChange={pickModel} disabled={modelsByAgent.length === 0}>
+              <PromptInputSelectTrigger size="sm" aria-label="Model">
+                <PromptInputSelectValue placeholder="Model" />
               </PromptInputSelectTrigger>
               <PromptInputSelectContent position="popper" align="start">
-                {agents.map((a) =>
-                  a.available ? (
-                    <PromptInputSelectItem key={a.id} value={a.id}>
-                      {a.label}
-                    </PromptInputSelectItem>
-                  ) : (
-                    <Tooltip key={a.id}>
-                      <TooltipTrigger asChild>
-                        <div>
-                          <PromptInputSelectItem value={a.id} disabled>
-                            {a.label}
-                            <span className="ml-2 text-xs text-muted-foreground">{a.reason ?? 'Unavailable'}</span>
-                          </PromptInputSelectItem>
-                        </div>
-                      </TooltipTrigger>
-                      {a.reason && <TooltipContent>{a.reason}</TooltipContent>}
-                    </Tooltip>
-                  ),
-                )}
+                {modelsByAgent.map(({ agent: a, models: list }) => (
+                  <SelectGroup key={a.id}>
+                    <SelectLabel>{a.label}</SelectLabel>
+                    {a.available ? (
+                      list.map((m) => (
+                        <PromptInputSelectItem key={`${a.id}:${m.id}`} value={`${a.id}:${m.id}`}>
+                          {m.label}
+                        </PromptInputSelectItem>
+                      ))
+                    ) : (
+                      <PromptInputSelectItem value={`${a.id}:`} disabled>
+                        {a.reason ?? 'Unavailable'}
+                      </PromptInputSelectItem>
+                    )}
+                  </SelectGroup>
+                ))}
               </PromptInputSelectContent>
             </PromptInputSelect>
             {noAgent && (
@@ -243,18 +247,6 @@ function Composer() {
                 </Link>
               </span>
             )}
-            <PromptInputSelect value={effectiveModel ?? ''} onValueChange={setModel} disabled={models.length === 0}>
-              <PromptInputSelectTrigger size="sm" aria-label="Model">
-                <PromptInputSelectValue placeholder="Model" />
-              </PromptInputSelectTrigger>
-              <PromptInputSelectContent position="popper" align="start">
-                {models.map((m) => (
-                  <PromptInputSelectItem key={m.id} value={m.id}>
-                    {m.label}
-                  </PromptInputSelectItem>
-                ))}
-              </PromptInputSelectContent>
-            </PromptInputSelect>
             {accounts.length > 1 && (
               <PromptInputSelect value={effectiveAccount ?? ''} onValueChange={setAccountId}>
                 <PromptInputSelectTrigger size="sm" aria-label="Account">
