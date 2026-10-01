@@ -153,7 +153,7 @@ function publishServices(id) {
 const credentials = {
   claude: { kind: 'claude', configured: true, label: 'sk-ant-oat…3f9a', method: 'oauth', updatedAt: ago(60 * 24 * 3) },
   codex: { kind: 'codex', configured: false, label: null, method: null, updatedAt: null },
-  github: { kind: 'github', configured: true, label: 'ghp_…a1b2 (natey)', method: null, updatedAt: ago(60 * 24 * 9) },
+  github: { kind: 'github', configured: true, label: 'ghp_…a1b2 (octocat)', method: null, updatedAt: ago(60 * 24 * 9) },
   'github-app': { kind: 'github-app', configured: false, label: null, method: null, updatedAt: null },
 }
 
@@ -258,7 +258,7 @@ const repos = [
   { fullName: 'acme/valet', url: 'https://github.com/acme/valet', defaultBranch: 'main', private: true, description: 'Cloud agents', pushedAt: ago(30) },
   { fullName: 'acme/docs-site', url: 'https://github.com/acme/docs-site', defaultBranch: 'develop', private: false, description: null, pushedAt: ago(60 * 26) },
   { fullName: 'acme/billing', url: 'https://github.com/acme/billing', defaultBranch: 'main', private: true, description: 'Invoices', pushedAt: ago(60 * 24 * 6) },
-  { fullName: 'natey/dotfiles', url: 'https://github.com/natey/dotfiles', defaultBranch: 'master', private: false, description: null, pushedAt: ago(60 * 24 * 90) },
+  { fullName: 'octocat/dotfiles', url: 'https://github.com/octocat/dotfiles', defaultBranch: 'master', private: false, description: null, pushedAt: ago(60 * 24 * 90) },
 ]
 
 const deviceLogins = new Map()
@@ -1015,7 +1015,7 @@ async function handle(req, res) {
     login.polls += 1
     if (login.polls >= 3 && login.status === 'pending') {
       login.status = 'complete'
-      Object.assign(credentials.codex, { configured: true, label: 'ChatGPT (natey@example.com)', method: 'oauth', updatedAt: now() })
+      Object.assign(credentials.codex, { configured: true, label: 'ChatGPT (octocat@example.com)', method: 'oauth', updatedAt: now() })
       refreshModelsInBackground('codex')
     }
     return send(res, 200, { ...login, polls: undefined })
@@ -1056,7 +1056,7 @@ async function handle(req, res) {
       if (!secret) return fail(res, 400, 'Missing token')
       Object.assign(credentials[kind], {
         configured: true,
-        label: kind === 'github' ? `${mask(secret)} (natey)` : mask(secret),
+        label: kind === 'github' ? `${mask(secret)} (octocat)` : mask(secret),
         method: kind === 'github' ? null : secret.startsWith('sk-ant-oat') ? 'oauth' : 'api-key',
         updatedAt: now(),
       })
