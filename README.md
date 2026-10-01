@@ -139,9 +139,10 @@ browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
 - **Usage.** Cost, tokens, and turns rolled up by project and by agent and model over
   7 days, 30 days, or all time, with each agent's last reported rate-limit windows.
   Codex reports no cost, so its rows show tokens and turns only.
-- **Permissions.** By default the container is the sandbox and the agent runs
-  without prompts. Threads can be created in *ask* mode, where tool use outside
-  file edits pauses for approval in the transcript.
+- **Permissions.** Each thread runs in one of its agent's own permission modes, chosen
+  when it is created, with a per-agent default under Settings. The container is the
+  sandbox, so the defaults skip prompts entirely (Claude `bypassPermissions`, Codex
+  `never`); in a mode that asks, the request pauses for approval in the transcript.
 - **MCP servers.** Servers added under Settings apply to every project or to selected
   ones, and are written into the sandbox at launch: Claude Code gets a generated
   `--mcp-config` file, Codex `[mcp_servers.*]` in its `config.toml`. Header and

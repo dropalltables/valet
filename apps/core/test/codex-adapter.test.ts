@@ -105,7 +105,7 @@ function startOptions(rec: ReturnType<typeof recorder>, extra: Partial<Parameter
     runner: new LocalRunner(),
     cwd: cli.dir,
     model: 'gpt-6-astra',
-    permissions: 'ask' as const,
+    permissions: 'on-request',
     env: { PATH: process.env.PATH ?? '' },
     resumeSessionId: null,
     mcpConfigPath: null,

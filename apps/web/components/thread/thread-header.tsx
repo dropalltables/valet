@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useState, type KeyboardEvent } from 'react'
-import { AGENT_LABELS, CI_FIX_MAX_ATTEMPTS, formatBytes, type Project, type PullRequest, type SandboxUsage, type ThreadListItem } from '@valet/shared'
+import { AGENT_LABELS, CI_FIX_MAX_ATTEMPTS, formatBytes, permissionLabel, type Project, type PullRequest, type SandboxUsage, type ThreadListItem } from '@valet/shared'
 import { MoreHorizontalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
@@ -132,7 +132,7 @@ export function ThreadHeader({ thread, project, costUsd, usage, actions, service
         <span>
           {AGENT_LABELS[thread.agent]} {thread.model}
         </span>
-        <span>{thread.permissions === 'ask' ? 'Ask' : 'Auto'}</span>
+        <span>{permissionLabel(thread.agent, thread.permissions)}</span>
         {cost && <span className="tabular-nums">{cost}</span>}
         {thread.mcpServers > 0 && <span className="tabular-nums">{thread.mcpServers} MCP</span>}
         {usage && (

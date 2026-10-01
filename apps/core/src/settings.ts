@@ -1,7 +1,7 @@
 import { eq, isNull } from 'drizzle-orm'
 import webpush from 'web-push'
 import { z } from 'zod'
-import { DEFAULT_MODEL, type Settings } from '@valet/shared'
+import { DEFAULT_MODEL, DEFAULT_PERMISSIONS, isPermissionMode, type AgentKind, type Settings } from '@valet/shared'
 import type { Config } from './config.js'
 import type { Cipher } from './crypto.js'
 import type { Db } from './db/index.js'
@@ -15,12 +15,15 @@ export type VapidKeys = { publicKey: string; privateKey: string }
 /** The stored columns, private key still encrypted. */
 type StoredVapid = { vapidPublicKey: string; vapidPrivateKeyEnc: string }
 
+const permissionMode = (agent: AgentKind): z.ZodString =>
+  z.string().refine((mode) => isPermissionMode(agent, mode), { message: `not a ${agent} permission mode` })
+
 export const updateSettingsSchema = z
   .object({
     idlePauseMinutes: z.number().int().min(1).max(24 * 60),
     defaultAgent: z.enum(['claude', 'codex']),
     defaultModel: z.object({ claude: z.string().min(1), codex: z.string().min(1) }).partial(),
-    defaultPermissions: z.enum(['auto', 'ask']),
+    defaultPermissions: z.object({ claude: permissionMode('claude'), codex: permissionMode('codex') }).partial(),
     allowProjectMcpJson: z.boolean(),
   })
   .partial()
@@ -39,7 +42,7 @@ export class SettingsService {
       idlePauseMinutes: this.cfg.VALET_IDLE_PAUSE_MINUTES,
       defaultAgent: 'claude',
       defaultModel: { ...DEFAULT_MODEL },
-      defaultPermissions: 'auto',
+      defaultPermissions: { ...DEFAULT_PERMISSIONS },
       allowProjectMcpJson: false,
     }
   }
@@ -48,10 +51,13 @@ export class SettingsService {
     const [row] = await this.db.select().from(settings).where(eq(settings.id, ROW_ID))
     const base = this.defaults()
     const stored = row?.data ?? {}
+    // Before per-agent modes this was one string ('auto' | 'ask'); the migration rewrote it.
+    const storedPermissions = typeof stored.defaultPermissions === 'object' ? stored.defaultPermissions : {}
     return {
       ...base,
       ...stored,
       defaultModel: { ...base.defaultModel, ...(stored.defaultModel ?? {}) },
+      defaultPermissions: { ...base.defaultPermissions, ...storedPermissions },
     }
   }
 
@@ -61,10 +67,14 @@ export class SettingsService {
     for (const [agent, model] of Object.entries(patch.defaultModel ?? {})) {
       if (model !== undefined) defaultModel[agent as keyof typeof defaultModel] = model
     }
+    const defaultPermissions = { ...current.defaultPermissions }
+    for (const [agent, mode] of Object.entries(patch.defaultPermissions ?? {})) {
+      if (mode !== undefined) defaultPermissions[agent as keyof typeof defaultPermissions] = mode
+    }
     const next: Settings = {
       idlePauseMinutes: patch.idlePauseMinutes ?? current.idlePauseMinutes,
       defaultAgent: patch.defaultAgent ?? current.defaultAgent,
-      defaultPermissions: patch.defaultPermissions ?? current.defaultPermissions,
+      defaultPermissions,
       allowProjectMcpJson: patch.allowProjectMcpJson ?? current.allowProjectMcpJson,
       defaultModel,
     }

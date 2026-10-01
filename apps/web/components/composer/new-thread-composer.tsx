@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useEffect, useMemo, useState, useSyncExternalStore, type ClipboardEvent, type KeyboardEvent } from 'react'
-import { DEFAULT_MODEL, DEFAULT_MODELS, type AgentKind, type PermissionPolicy } from '@valet/shared'
+import { DEFAULT_MODEL, DEFAULT_MODELS, DEFAULT_PERMISSIONS, PERMISSION_MODES, type AgentKind, type PermissionMode } from '@valet/shared'
 import { ImageIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
@@ -57,7 +57,7 @@ function Composer() {
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
   const [agent, setAgent] = useState<AgentKind | null>(null)
   const [model, setModel] = useState<string | null>(null)
-  const [permissions, setPermissions] = useState<PermissionPolicy | null>(null)
+  const [permissions, setPermissions] = useState<PermissionMode | null>(null)
   const [busy, setBusy] = useState(false)
 
   const project = projects.find((p) => p.id === projectId) ?? null
@@ -71,10 +71,6 @@ function Composer() {
     const pick = agents.find((a) => a.id === preferred && a.available) ?? agents.find((a) => a.available)
     if (pick) setAgent(pick.id)
   }, [agent, agents, settings])
-  useEffect(() => {
-    if (permissions || !settings) return
-    setPermissions(settings.defaultPermissions)
-  }, [permissions, settings])
   useEffect(() => {
     if (projectId || projects.length === 0) return
     setProjectId(projects[0]?.id ?? null)
@@ -93,6 +89,12 @@ function Composer() {
     ) ??
     models[0]?.id ??
     null
+  const permissionModes = agent ? PERMISSION_MODES[agent] : []
+  // The pick, then the settings default, then the built-in default; each agent has its own modes.
+  const effectivePermissions =
+    [permissions, agent && settings?.defaultPermissions[agent], agent && DEFAULT_PERMISSIONS[agent]].find(
+      (id): id is string => !!id && permissionModes.some((m) => m.id === id),
+    ) ?? null
 
   const branches = branchData?.branches ?? (project ? [project.defaultBranch] : [])
   const effectiveBranch = baseBranch && branches.includes(baseBranch) ? baseBranch : (project?.defaultBranch ?? null)
@@ -119,7 +121,7 @@ function Composer() {
           .map((f) => ({ mediaType: f.mediaType, dataUrl: f.url })),
         agent,
         model: effectiveModel,
-        permissions: permissions ?? 'auto',
+        ...(effectivePermissions ? { permissions: effectivePermissions } : {}),
         baseBranch: effectiveBranch,
       })
       upsertThread({ ...thread, projectName: project.name, diffStats: null, mcpServers: 0 })
@@ -178,16 +180,16 @@ function Composer() {
         <PromptInputFooter className="flex-nowrap items-center gap-2">
           <PromptInputTools className="min-w-0 flex-nowrap gap-1">
             <AttachButton />
-            <PromptInputSelect
-              value={permissions ?? 'auto'}
-              onValueChange={(v) => setPermissions(v as PermissionPolicy)}
-            >
+            <PromptInputSelect value={effectivePermissions ?? ''} onValueChange={setPermissions} disabled={permissionModes.length === 0}>
               <PromptInputSelectTrigger size="sm" aria-label="Permissions">
-                <PromptInputSelectValue />
+                <PromptInputSelectValue placeholder="Permissions" />
               </PromptInputSelectTrigger>
               <PromptInputSelectContent position="popper" align="start">
-                <PromptInputSelectItem value="auto">Auto</PromptInputSelectItem>
-                <PromptInputSelectItem value="ask">Ask</PromptInputSelectItem>
+                {permissionModes.map((m) => (
+                  <PromptInputSelectItem key={m.id} value={m.id}>
+                    {m.label}
+                  </PromptInputSelectItem>
+                ))}
               </PromptInputSelectContent>
             </PromptInputSelect>
           </PromptInputTools>
@@ -197,6 +199,7 @@ function Composer() {
               onValueChange={(v) => {
                 setAgent(v as AgentKind)
                 setModel(null)
+                setPermissions(null)
               }}
             >
               <PromptInputSelectTrigger size="sm" aria-label="Agent">

@@ -6,6 +6,12 @@ import { nowIso, truncateOutput, type Adapter, type AdapterHooks, type PromptIma
 
 const log = logger('codex')
 
+/** The protocol's approval policies; the route validated the mode against PERMISSION_MODES already. */
+function askForApproval(mode: string): P.AskForApproval {
+  if (mode === 'untrusted' || mode === 'on-request' || mode === 'never') return mode
+  throw new Error(`codex has no approval policy named ${mode}`)
+}
+
 const STOP_GRACE_MS = 5_000
 const STDERR_KEEP = 4096
 
@@ -65,7 +71,7 @@ export class CodexAdapter implements Adapter {
         cwd: opts.cwd,
         model: opts.model,
         sandbox: 'danger-full-access',
-        approvalPolicy: opts.permissions === 'auto' ? 'never' : 'on-request',
+        approvalPolicy: askForApproval(opts.permissions),
         config: { model_reasoning_effort: 'medium' },
         developerInstructions: opts.systemPromptSuffix,
       }

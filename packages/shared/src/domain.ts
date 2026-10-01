@@ -51,14 +51,44 @@ export const DEFAULT_MODEL: Record<AgentKind, string> = {
 }
 
 /**
- * How the agent's tool use is gated.
- *
- * `auto`: no prompts; the container is the sandbox (Claude `bypassPermissions`,
- * Codex `approvalPolicy: never` + `dangerFullAccess`).
- * `ask`: edits are auto-approved, everything else asks; the question surfaces in the
- * transcript as a `permission.request` event and the thread goes to `waiting`.
+ * How the agent's tool use is gated: one of the agent's own permission modes, passed
+ * through to the CLI (Claude `--permission-mode`, Codex `approvalPolicy`). Whatever a
+ * mode leaves to the user surfaces in the transcript as a `permission.request` event
+ * and the thread goes to `waiting`. The container is the sandbox either way.
  */
-export type PermissionPolicy = 'auto' | 'ask'
+export type PermissionMode = string
+
+export type PermissionOption = { id: PermissionMode; label: string }
+
+/** The modes each CLI documents; neither lists them over its protocol. */
+export const PERMISSION_MODES: Record<AgentKind, ReadonlyArray<PermissionOption>> = {
+  claude: [
+    { id: 'bypassPermissions', label: 'Bypass permissions' },
+    { id: 'auto', label: 'Auto' },
+    { id: 'acceptEdits', label: 'Accept edits' },
+    { id: 'plan', label: 'Plan' },
+    { id: 'manual', label: 'Manual' },
+    { id: 'dontAsk', label: "Don't ask" },
+  ],
+  codex: [
+    { id: 'never', label: 'Never ask' },
+    { id: 'on-request', label: 'On request' },
+    { id: 'untrusted', label: 'Untrusted' },
+  ],
+}
+
+export const DEFAULT_PERMISSIONS: Record<AgentKind, PermissionMode> = {
+  claude: 'bypassPermissions',
+  codex: 'never',
+}
+
+export function isPermissionMode(agent: AgentKind, mode: string): boolean {
+  return PERMISSION_MODES[agent].some((m) => m.id === mode)
+}
+
+export function permissionLabel(agent: AgentKind, mode: PermissionMode): string {
+  return PERMISSION_MODES[agent].find((m) => m.id === mode)?.label ?? mode
+}
 
 /**
  * Thread lifecycle.
@@ -197,7 +227,7 @@ export type Thread = {
   title: string
   agent: AgentKind
   model: string
-  permissions: PermissionPolicy
+  permissions: PermissionMode
   status: ThreadStatus
   /** Human-readable reason when `status === 'error'`. */
   error: string | null
@@ -431,7 +461,7 @@ export type Settings = {
   idlePauseMinutes: number
   defaultAgent: AgentKind
   defaultModel: Record<AgentKind, string>
-  defaultPermissions: PermissionPolicy
+  defaultPermissions: Record<AgentKind, PermissionMode>
   /**
    * Whether the servers a repository declares in its own `.mcp.json` are merged
    * into the config Valet writes. Off by default: they start processes in the

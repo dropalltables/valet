@@ -85,7 +85,7 @@ const startOptions = (rec: ReturnType<typeof recorder>) => ({
   runner: new LocalRunner(),
   cwd: cli.dir,
   model: 'opus',
-  permissions: 'ask' as const,
+  permissions: 'acceptEdits',
   env: { PATH: process.env.PATH ?? '' },
   resumeSessionId: null,
   mcpConfigPath: null,

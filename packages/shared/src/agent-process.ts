@@ -1,3 +1,5 @@
+import type { PermissionMode } from './domain.js'
+
 /**
  * The seam between agent adapters (Claude, Codex normalizers in core) and the
  * thing that actually runs the CLI.
@@ -40,7 +42,8 @@ export type AdapterStartOptions = {
   runner: ProcessRunner
   cwd: string
   model: string
-  permissions: 'auto' | 'ask'
+  /** One of the agent's `PERMISSION_MODES`. */
+  permissions: PermissionMode
   /** Credential env for the CLI (`CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_HOME`, ...). */
   env: Record<string, string>
   /** Resume this agent-side session when set (after a pause/wake or core restart). */

@@ -141,7 +141,7 @@ export class ClaudeAdapter implements Adapter {
       '--permission-prompt-tool',
       'stdio',
       '--permission-mode',
-      opts.permissions === 'auto' ? 'bypassPermissions' : 'acceptEdits',
+      opts.permissions,
       ...(opts.resumeSessionId ? ['--resume', opts.resumeSessionId] : ['--session-id', crypto.randomUUID()]),
       '--model',
       opts.model,

@@ -95,7 +95,7 @@ function thread(overrides) {
     title: 'Untitled',
     agent: 'claude',
     model: 'opus',
-    permissions: 'auto',
+    permissions: 'bypassPermissions',
     status: 'idle',
     error: null,
     branch: 'valet/untitled-0000',
@@ -194,7 +194,7 @@ const settings = {
   idlePauseMinutes: 10,
   defaultAgent: 'claude',
   defaultModel: { claude: 'opus', codex: 'gpt-6-astra' },
-  defaultPermissions: 'auto',
+  defaultPermissions: { claude: 'bypassPermissions', codex: 'never' },
   allowProjectMcpJson: false,
 }
 
@@ -589,7 +589,7 @@ async function startThread(row, prompt) {
 
 // Seed threads across every status.
 {
-  const t1 = addThread(thread({ id: 't-idle', title: 'Fix the idle timer comparison', branch: 'valet/idle-timer-fix-7f3a', permissions: 'ask', costUsd: 0.42, lastActivityAt: ago(12), createdAt: ago(45) }))
+  const t1 = addThread(thread({ id: 't-idle', title: 'Fix the idle timer comparison', branch: 'valet/idle-timer-fix-7f3a', permissions: 'acceptEdits', costUsd: 0.42, lastActivityAt: ago(12), createdAt: ago(45) }))
   threads.get('t-idle').diffStats = { files: 3, additions: 42, deletions: 9 }
   threads.get('t-idle').services = [
     service('t-idle', { name: 'web', port: 30000, command: 'bun run dev --port $PORT', source: 'yaml', health: '/healthz', portal: { path: '/', title: 'Web' } }),
@@ -629,7 +629,7 @@ async function startThread(row, prompt) {
   addThread(thread({ id: 't-running', projectId: 'p-docs', title: 'Migrate docs build to Astro 6', branch: 'valet/astro-6-migration-1b2c', baseBranch: 'develop', agent: 'codex', model: 'gpt-6-astra', status: 'running', lastActivityAt: ago(1), createdAt: ago(20) }))
   threads.get('t-running').diffStats = { files: 12, additions: 318, deletions: 240 }
   addThread(
-    thread({ id: 't-waiting', title: 'Add rate limit headers to the API', branch: 'valet/rate-limit-headers-9d1e', permissions: 'ask', status: 'waiting', lastActivityAt: ago(3), createdAt: ago(30), pr: { url: 'https://github.com/acme/valet/pull/412', number: 412, state: 'open' } }),
+    thread({ id: 't-waiting', title: 'Add rate limit headers to the API', branch: 'valet/rate-limit-headers-9d1e', permissions: 'acceptEdits', status: 'waiting', lastActivityAt: ago(3), createdAt: ago(30), pr: { url: 'https://github.com/acme/valet/pull/412', number: 412, state: 'open' } }),
     [
       { type: 'turn.start', turnId: 'turn-waiting', prompt: { text: 'Add per-route rate limit headers to the API and open a PR.', images: [] }, mode: 'queue', at: ago(4) },
       {
@@ -1191,7 +1191,7 @@ async function handle(req, res) {
           title,
           agent: body.agent,
           model: body.model,
-          permissions: body.permissions ?? 'auto',
+          permissions: body.permissions ?? 'bypassPermissions',
           status: 'provisioning',
           branch: `valet/${slug}-${randomUUID().slice(0, 4)}`,
           baseBranch: body.baseBranch ?? project.defaultBranch,

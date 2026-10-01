@@ -151,7 +151,7 @@ const THREAD_ROW: Thread = {
   title: 'Add sharing',
   agent: 'claude',
   model: 'sonnet',
-  permissions: 'ask',
+  permissions: 'acceptEdits',
   status: 'running',
   error: null,
   branch: 'valet/add-sharing-1a2b',

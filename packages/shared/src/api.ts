@@ -29,7 +29,7 @@ import type {
   ModelOption,
   NotificationEvent,
   NotificationSettings,
-  PermissionPolicy,
+  PermissionMode,
   Portal,
   Project,
   ProjectEnvVar,
@@ -273,7 +273,7 @@ export type CreateThreadRequest = {
   images?: Array<{ mediaType: string; dataUrl: string }>
   agent: AgentKind
   model: string
-  permissions?: PermissionPolicy
+  permissions?: PermissionMode
   /** Defaults to the project's default branch. */
   baseBranch?: string
 }

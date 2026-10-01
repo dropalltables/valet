@@ -336,7 +336,7 @@ export class ThreadService {
         title: titleFromPrompt(stored),
         agent: req.agent,
         model: req.model,
-        permissions: req.permissions ?? settings.defaultPermissions,
+        permissions: req.permissions ?? settings.defaultPermissions[req.agent],
         status: 'provisioning',
         error: null,
         branch: `valet/${slugify(stored)}-${shortHex()}`,

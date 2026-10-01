@@ -83,7 +83,7 @@ async function seed(db: Db): Promise<void> {
     title: id,
     agent,
     model,
-    permissions: 'auto' as const,
+    permissions: 'bypassPermissions',
     status: 'idle' as const,
     branch: `valet/${id}`,
     baseBranch: 'main',

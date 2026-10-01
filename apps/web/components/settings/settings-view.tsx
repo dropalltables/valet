@@ -5,6 +5,7 @@ import {
   AGENT_LABELS,
   DEFAULT_MODELS,
   MAX_WEBHOOKS,
+  PERMISSION_MODES,
   NOTIFICATION_EVENTS,
   NOTIFICATION_EVENT_LABELS,
   WEBHOOK_LABELS,
@@ -14,7 +15,6 @@ import {
   type CredentialStatus,
   type DeviceLogin,
   type NotificationEvent,
-  type PermissionPolicy,
   type PutWebhooksRequest,
   type Settings,
   type Webhook,
@@ -621,21 +621,26 @@ function Defaults() {
               </Select>
             </div>
           ))}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="default-permissions">Permissions</Label>
-            <Select
-              value={draft.defaultPermissions}
-              onValueChange={(v) => setDraft({ ...draft, defaultPermissions: v as PermissionPolicy })}
-            >
-              <SelectTrigger id="default-permissions" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Auto</SelectItem>
-                <SelectItem value="ask">Ask</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          {(Object.keys(AGENT_LABELS) as AgentKind[]).map((agent) => (
+            <div key={agent} className="flex flex-col gap-1.5">
+              <Label htmlFor={`permissions-${agent}`}>{AGENT_LABELS[agent]} permissions</Label>
+              <Select
+                value={draft.defaultPermissions[agent]}
+                onValueChange={(v) => setDraft({ ...draft, defaultPermissions: { ...draft.defaultPermissions, [agent]: v } })}
+              >
+                <SelectTrigger id={`permissions-${agent}`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PERMISSION_MODES[agent].map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
         </div>
         <div>
           <Button type="submit" size="sm" disabled={!dirty || busy}>

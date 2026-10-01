@@ -5,6 +5,7 @@ import { z } from 'zod'
 import {
   AGENT_LABELS,
   DEFAULT_MODEL,
+  isPermissionMode,
   GITHUB_WEBHOOK_PATH,
   USAGE_RANGES,
   createServiceRequestSchema,
@@ -109,7 +110,7 @@ const createThreadSchema = z.object({
   images: z.array(imageSchema).optional(),
   agent: agentKind,
   model: z.string().min(1),
-  permissions: z.enum(['auto', 'ask']).optional(),
+  permissions: z.string().min(1).optional(),
   baseBranch: z.string().optional(),
 })
 const updateThreadSchema = z.object({ title: z.string().optional(), autoFixCi: z.boolean().optional() })
@@ -447,6 +448,9 @@ export function createApp(deps: AppDeps): Hono {
   })
   app.post('/api/threads', jsonBody(createThreadSchema), async (c) => {
     const body = c.req.valid('json')
+    if (body.permissions && !isPermissionMode(body.agent, body.permissions)) {
+      throw badRequest(`${body.permissions} is not a ${body.agent} permission mode`)
+    }
     const thread = await deps.threads.create({
       projectId: body.projectId,
       prompt: body.prompt,
