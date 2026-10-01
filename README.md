@@ -76,9 +76,11 @@ so leave `VALET_DOCKER_NETWORK` and `VALET_REPOS_VOLUME` unset.
    (`valet.example.com`), and `VALET_IMAGE_PREFIX` when deploying published images.
 3. Leave the domain field on `web` empty. Portals need a wildcard host, which the domain
    field cannot express, so the compose declares the Traefik router itself from
-   `VALET_PORTAL_DOMAIN` and `VALET_CERT_RESOLVER`. Turn off "Escape special characters in
-   labels" in the application's advanced settings, or Docker Compose never interpolates
-   them. Coolify's Traefik joins the stack's network by itself.
+   `VALET_PORTAL_DOMAIN`, `VALET_CERT_RESOLVER` and `VALET_PROXY_NETWORK`. Turn off "Escape
+   special characters in labels" in the application's advanced settings, or Docker Compose
+   never interpolates them. Coolify attaches its proxy to a network named after the
+   application's UUID, not to the stack's own `valet` network, so set `VALET_PROXY_NETWORK`
+   to that UUID or Traefik may route to an address it cannot reach.
 4. Wildcards need a DNS challenge, which Coolify's default `letsencrypt` resolver cannot do.
    Add a resolver to Coolify's proxy (Server, Proxy, Configuration), name it in
    `VALET_CERT_RESOLVER`, and restart the proxy. With Cloudflare:

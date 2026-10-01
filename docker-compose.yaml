@@ -99,6 +99,9 @@ services:
       - traefik.http.routers.valet.tls.domains[0].main=${VALET_PORTAL_DOMAIN}
       - traefik.http.routers.valet.tls.domains[0].sans=*.${VALET_PORTAL_DOMAIN}
       - traefik.http.services.valet.loadbalancer.server.port=3000
+      # web sits on more than one network when the proxy brings its own; Traefik needs
+      # telling which one it shares, or it picks one at random. Empty means unset.
+      - traefik.docker.network=${VALET_PROXY_NETWORK:-}
     depends_on:
       core:
         condition: service_started
