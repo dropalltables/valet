@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { ChevronRightIcon } from 'lucide-react'
 import {
   LIVE_STATUSES,
   SANDBOX,
@@ -32,6 +33,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -106,6 +108,7 @@ export function ServicesPanel({
   const live = LIVE_STATUSES.includes(thread.status)
   const [selectedPort, setSelectedPort] = useState<number | null>(null)
   const [adding, setAdding] = useState(false)
+  const [detectedOpen, setDetectedOpen] = useState(false)
 
   if (!live) return <PaneState status={thread.status} onWake={actions.wake} waking={actions.busy === 'wake'} />
 
@@ -147,14 +150,20 @@ export function ServicesPanel({
           </ul>
         )}
         {detected.length > 0 && (
-          <>
-            <h3 className="px-3 pt-3 pb-1 text-xs text-muted-foreground">Detected</h3>
-            <ul className="flex flex-col">
-              {detected.map((p) => (
-                <PortalRow key={p.port} threadId={thread.id} portal={p} selected={p.port === selectedPort} onSelect={() => setSelectedPort(p.port)} />
-              ))}
-            </ul>
-          </>
+          <Collapsible open={detectedOpen} onOpenChange={setDetectedOpen} className="group/detected">
+            <CollapsibleTrigger className="flex w-full items-center gap-1 px-3 pt-3 pb-1 text-left text-xs text-muted-foreground hover:text-foreground">
+              <ChevronRightIcon className="size-3.5 shrink-0 transition-transform group-data-[state=open]/detected:rotate-90" />
+              <span>Detected</span>
+              <span className="tabular-nums">{detected.length}</span>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <ul className="flex flex-col">
+                {detected.map((p) => (
+                  <PortalRow key={p.port} threadId={thread.id} portal={p} selected={p.port === selectedPort} onSelect={() => setSelectedPort(p.port)} />
+                ))}
+              </ul>
+            </CollapsibleContent>
+          </Collapsible>
         )}
       </div>
       {selected && <MiniBrowser key={selected.port} threadId={thread.id} portal={selected} />}
@@ -422,9 +431,9 @@ function PortalRow({ threadId, portal, selected, onSelect }: { threadId: string;
   return (
     <li className={cn('flex items-center gap-1 border-b px-2 py-1 text-xs', selected && 'bg-accent/50')}>
       <button type="button" onClick={onSelect} aria-pressed={selected} className="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left hover:text-foreground">
-        <span className="shrink-0 font-medium">{target.title}</span>
+        <span className="min-w-0 truncate font-medium">{target.title}</span>
         {(portal.name ?? portal.process) && <span className="shrink-0 text-muted-foreground tabular-nums">{portal.port}</span>}
-        <span className="min-w-0 truncate font-mono text-muted-foreground">{portal.url}</span>
+        <span className="min-w-0 shrink-[2] truncate font-mono text-muted-foreground">{portal.url}</span>
       </button>
       <PortalActions threadId={threadId} target={target} />
     </li>
