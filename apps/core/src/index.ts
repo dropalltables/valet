@@ -79,6 +79,8 @@ async function main(): Promise<void> {
   await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))
   threads.startTimers()
+  // A new sandbox image means new agent CLIs, whose model lists may differ.
+  docker.onImageChange(() => void catalog.refreshStale(0).catch((err: unknown) => log.error('model catalog check failed', { err })))
   docker.startImageWatcher()
   snapshots.startSweeper()
   await catalog.refreshStale(STALE_AFTER_MS).catch((err: unknown) => log.error('model catalog check failed', { err }))

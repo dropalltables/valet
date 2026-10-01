@@ -181,6 +181,7 @@ async function discover(docker: Docker, cfg: Config): Promise<DockerEnvironment>
 export class DockerClient {
   readonly docker: Docker
   private imageChecker: NodeJS.Timeout | null = null
+  private readonly imageChangeListeners: Array<(status: SandboxImageStatus) => void> = []
   private pull: Promise<void> | null = null
   private pullPercent: number | null = null
   private pullError: string | null = null
@@ -229,37 +230,51 @@ export class DockerClient {
     }
   }
 
-  /** Pulls the sandbox image when it is missing, now and every ten minutes. */
+  /**
+   * Keeps the sandbox image current: pulls it now and every ten minutes. A registry
+   * image is pulled each time, which is a manifest check when nothing changed, so a
+   * newly published image reaches the next thread without a restart. A locally built
+   * image is only ever checked for presence.
+   */
   startImageWatcher(): void {
     if (this.imageChecker) return
-    const check = (): void => void this.pullImageIfMissing().catch((err: unknown) => log.error('sandbox image check failed', { err }))
+    const check = (): void => void this.syncImage().catch((err: unknown) => log.error('sandbox image check failed', { err }))
     this.imageChecker = setInterval(check, IMAGE_CHECK_INTERVAL_MS)
     this.imageChecker.unref()
     check()
   }
 
+  /** Runs after the watcher has pulled a sandbox image whose id differs from the one before. */
+  onImageChange(listener: (status: SandboxImageStatus) => void): void {
+    this.imageChangeListeners.push(listener)
+  }
+
   /** One pull at a time; every caller waits on the one in flight. */
-  private pullImageIfMissing(): Promise<void> {
-    this.pull ??= this.pullMissingImage().finally(() => {
+  private syncImage(): Promise<void> {
+    this.pull ??= this.pullLatestImage().finally(() => {
       this.pull = null
     })
     return this.pull
   }
 
-  private async pullMissingImage(): Promise<void> {
+  private async pullLatestImage(): Promise<void> {
     const image = this.cfg.VALET_SANDBOX_IMAGE
-    const { present } = await this.imageStatus()
-    if (present) {
-      this.pullError = null
+    const before = await this.imageStatus()
+    if (isLocallyBuilt(image)) {
+      if (before.present) this.pullError = null
       return
     }
-    if (isLocallyBuilt(image)) return
-    log.info('pulling sandbox image', { image })
-    this.pullPercent = 0
+    if (!before.present) {
+      log.info('pulling sandbox image', { image })
+      this.pullPercent = 0
+    }
     this.pullError = null
     try {
       await this.pullImage(image)
-      log.info('pulled sandbox image', { image })
+      const after = await this.imageStatus()
+      if (after.imageId === before.imageId) return
+      log.info(before.present ? 'updated sandbox image' : 'pulled sandbox image', { image, imageId: after.imageId })
+      for (const listener of this.imageChangeListeners) listener(after)
     } catch (err) {
       this.pullError = errorMessage(err)
       log.error('pulling sandbox image failed', { image, err })

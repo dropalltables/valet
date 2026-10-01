@@ -73,10 +73,17 @@ RUN set -eux; \
 # Agent CLIs and the browser driver, global and world-readable (npm's prefix is /usr/local here).
 # The platform binaries are optional deps or postinstall downloads; the version checks below fail the build if they did not land.
 # agent-browser drives the system Chromium (AGENT_BROWSER_EXECUTABLE_PATH below) instead of downloading its own.
+#
+# Every build takes the newest release of each CLI. The images workflow resolves the
+# versions first and passes them in, so this layer is rebuilt when a CLI ships and
+# reused from cache otherwise; a local build without the args resolves them itself.
+ARG CLAUDE_CODE_VERSION=latest
+ARG CODEX_VERSION=latest
+ARG AGENT_BROWSER_VERSION=latest
 RUN npm install -g --include=optional --allow-scripts=@anthropic-ai/claude-code,agent-browser --no-audit --no-fund \
-      @anthropic-ai/claude-code@2.1.263 \
-      @openai/codex@0.153.4 \
-      agent-browser@0.37.0 \
+      @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+      @openai/codex@${CODEX_VERSION} \
+      agent-browser@${AGENT_BROWSER_VERSION} \
  && npm cache clean --force
 
 # npm 11 blocks dependency install scripts it has not been told about (`npm approve-scripts`).

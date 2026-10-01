@@ -100,13 +100,14 @@ so leave `VALET_DOCKER_NETWORK` and `VALET_REPOS_VOLUME` unset.
 
    Point `valet.example.com` and `*.valet.example.com` at the server.
 5. Core mounts `/var/run/docker.sock`, which Coolify allows as it stands.
-6. Core pulls the sandbox image when it is missing, on startup and every ten minutes, with
-   progress in the log and under Settings. An image name without a registry host (the default
-   `valet-sandbox:latest`) is built on the host instead, with
-   `docker compose --profile sandbox build`.
+6. Core pulls the sandbox image on startup and every ten minutes, with progress in the log
+   and under Settings, so a newer published image reaches the next thread without a
+   redeploy. An image name without a registry host (the default `valet-sandbox:latest`) is
+   built on the host instead, with `docker compose --profile sandbox build`.
 
 The `images` workflow publishes `valet-core`, `valet-web` and `valet-sandbox` on every push to
-`main`. From a fork, make the three packages public after its first run (Packages, Package
+`main`, and rebuilds `valet-sandbox` daily: the sandbox installs the newest release of each
+agent CLI at build time, and the model lists Valet offers are whatever those CLIs report. From a fork, make the three packages public after its first run (Packages, Package
 settings, Change visibility): neither compose nor core sends registry credentials. Its
 `linux/arm64` jobs run on `ubuntu-24.04-arm`, which GitHub provides to public repositories only.
 

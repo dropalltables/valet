@@ -39,10 +39,9 @@ export const DEFAULT_MODELS: Record<AgentKind, ReadonlyArray<ModelOption>> = {
     { id: 'haiku', label: 'Haiku' },
   ],
   codex: [
+    { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
+    { id: 'gpt-6-luna', label: 'GPT-6 Luna' },
     { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
-    { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
-    { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
-    { id: 'gpt-5.5', label: 'GPT-5.5' },
   ],
 }
 

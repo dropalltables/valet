@@ -9,29 +9,46 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  # The sandbox image installs the newest agent CLIs, so it is rebuilt daily.
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
 jobs:
+  # Which images to build (only the sandbox on the daily run) and the CLI versions it gets.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.plan.outputs.images }}
+      claude_code: ${{ steps.plan.outputs.claude_code }}
+      codex: ${{ steps.plan.outputs.codex }}
+      agent_browser: ${{ steps.plan.outputs.agent_browser }}
+    steps:
+      - id: plan
+        env:
+          SCHEDULED: ${{ github.event_name == 'schedule' }}
+        run: |
+          if [ "$SCHEDULED" = true ]; then echo 'images=["sandbox"]'; else echo 'images=["core","web","sandbox"]'; fi >> "$GITHUB_OUTPUT"
+          echo "claude_code=$(npm view @anthropic-ai/claude-code version)" >> "$GITHUB_OUTPUT"
+          echo "codex=$(npm view @openai/codex version)" >> "$GITHUB_OUTPUT"
+          echo "agent_browser=$(npm view agent-browser version)" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        image: [core, web, sandbox]
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
         platform: [linux/amd64, linux/arm64]
         include:
           - platform: linux/amd64
             runner: ubuntu-latest
           - platform: linux/arm64
             runner: ubuntu-24.04-arm
-          - image: core
-            dockerfile: apps/core/Dockerfile
-          - image: web
-            dockerfile: apps/web/Dockerfile
-          - image: sandbox
-            dockerfile: sandbox/Dockerfile
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -55,8 +72,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: ${{ matrix.image == 'sandbox' && 'sandbox/Dockerfile' || format('apps/{0}/Dockerfile', matrix.image) }}
           platforms: ${{ matrix.platform }}
+          build-args: |
+            CLAUDE_CODE_VERSION=${{ needs.plan.outputs.claude_code }}
+            CODEX_VERSION=${{ needs.plan.outputs.codex }}
+            AGENT_BROWSER_VERSION=${{ needs.plan.outputs.agent_browser }}
           outputs: type=image,name=${{ steps.names.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ steps.names.outputs.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ steps.names.outputs.platform }}
@@ -75,11 +96,11 @@ jobs:
           retention-days: 1
 
   manifest:
-    needs: build
+    needs: [plan, build]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        image: [core, web, sandbox]
+        image: ${{ fromJSON(needs.plan.outputs.images) }}
     steps:
       - id: names
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/valet-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
