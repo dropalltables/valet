@@ -1062,8 +1062,13 @@ async function handle(req, res) {
   }
   if (path === '/api/credentials/github/repos') {
     if (!credentials.github.configured) return fail(res, 400, 'GitHub is not configured')
-    const query = (url.searchParams.get('query') ?? '').toLowerCase()
-    return send(res, 200, { repos: repos.filter((r) => r.fullName.toLowerCase().includes(query)) })
+    const query = (url.searchParams.get('query') ?? '').trim().toLowerCase()
+    const own = repos.filter((r) => r.fullName.toLowerCase().includes(query))
+    // A query naming a repository resolves it, whoever owns it, like the real lookup against GitHub.
+    const m = /^(?:https?:\/\/github\.com\/)?([a-z0-9_.-]+)\/([a-z0-9_.-]+?)(?:\.git)?\/?$/.exec(query)
+    if (!m || own.some((r) => r.fullName.toLowerCase() === `${m[1]}/${m[2]}`)) return send(res, 200, { repos: own })
+    const named = { fullName: `${m[1]}/${m[2]}`, url: `https://github.com/${m[1]}/${m[2]}`, defaultBranch: 'main', private: false, description: null, pushedAt: ago(60 * 24 * 3) }
+    return send(res, 200, { repos: [named, ...own] })
   }
   if (seg[0] === 'api' && seg[1] === 'credentials' && seg[2] === 'github' && seg[3] === 'repos' && seg[6] === 'branches') {
     const repo = repos.find((r) => r.fullName === `${seg[4]}/${seg[5]}`)

@@ -175,7 +175,7 @@ function RepoSearch({
 
   return (
     <Command shouldFilter={false} className={cn('rounded-md border', className)}>
-      <CommandInput placeholder="Search repositories" value={query} onValueChange={setQuery} />
+      <CommandInput placeholder="Search, or paste owner/repo or a URL" value={query} onValueChange={setQuery} />
       <CommandList className="max-h-none flex-1">
         {error && <CommandEmpty>{error}</CommandEmpty>}
         {!error && repos?.length === 0 && <CommandEmpty>No repositories</CommandEmpty>}

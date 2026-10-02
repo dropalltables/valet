@@ -15,7 +15,7 @@ import { ACCOUNT_NOUNS, randomAccountName } from '../src/credentials/names.js'
 import { diedOfMemory, isLocallyBuilt, reposVolumeName, soleNetworkName, toUsage } from '../src/docker/client.js'
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
 import { managedServicesReplySchema } from '@valet/shared'
-import { parseGitHubUrl } from '../src/git/github.js'
+import { parseGitHubUrl, parseRepoQuery } from '../src/git/github.js'
 import { MAX_HTML_BYTES, allowInjectedScript, decodeHtml, injectWidget, injectionPoint, isInjectableHtml, reviewMessage } from '../src/services/review.js'
 import { titleFromPrompt } from '../src/threads/mapper.js'
 import type { GitRunner } from '../src/git/changes.js'
@@ -129,6 +129,15 @@ test('github url parsing', () => {
   assert.deepEqual(parseGitHubUrl('https://github.com/acme/widgets.git/'), { owner: 'acme', repo: 'widgets' })
   assert.deepEqual(parseGitHubUrl('git@github.com:acme/widgets.git'), { owner: 'acme', repo: 'widgets' })
   assert.equal(parseGitHubUrl('https://gitlab.com/acme/widgets'), null)
+})
+
+test('parseRepoQuery accepts owner/repo as well as URLs', () => {
+  assert.deepEqual(parseRepoQuery('acme/widgets'), { owner: 'acme', repo: 'widgets' })
+  assert.deepEqual(parseRepoQuery(' acme/widgets.git/ '), { owner: 'acme', repo: 'widgets' })
+  assert.deepEqual(parseRepoQuery('https://github.com/acme/widgets'), { owner: 'acme', repo: 'widgets' })
+  assert.equal(parseRepoQuery('widgets'), null)
+  assert.equal(parseRepoQuery('acme/widgets/tree/main'), null)
+  assert.equal(parseRepoQuery('https://gitlab.com/acme/widgets'), null)
 })
 
 test('numstat -z parsing with renames and binaries', () => {

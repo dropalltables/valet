@@ -128,7 +128,11 @@ export type DeviceLoginResponse = DeviceLogin
 /** A missing name is generated like `CreateAccountRequest`. */
 export type StartDeviceLoginRequest = { name?: string }
 
-/** GET /api/credentials/github/repos?query= -> repos the token can see, most recently pushed first */
+/**
+ * GET /api/credentials/github/repos?query= -> the token's own repos matching the query, most recently
+ * pushed first. A query naming a repository (`owner/repo` or a GitHub URL) puts that repository first,
+ * whoever owns it, when the token can read it.
+ */
 export type GitHubRepo = {
   fullName: string
   url: string

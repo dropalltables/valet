@@ -14,6 +14,17 @@ export function parseGitHubUrl(url: string): RepoRef | null {
   return { owner: m[1], repo: m[2] }
 }
 
+const OWNER_REPO_RE = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/
+
+/** What someone types into the repository box: a GitHub URL, or a bare `owner/repo`. */
+export function parseRepoQuery(query: string): RepoRef | null {
+  const url = parseGitHubUrl(query)
+  if (url) return url
+  const m = OWNER_REPO_RE.exec(query.trim())
+  if (!m || !m[1] || !m[2]) return null
+  return { owner: m[1], repo: m[2] }
+}
+
 export function canonicalRepoUrl(ref: RepoRef): string {
   return `https://github.com/${ref.owner}/${ref.repo}`
 }
@@ -26,6 +37,17 @@ export function requireRepoRef(repoUrl: string | null): RepoRef {
   const ref = repoUrl ? parseGitHubUrl(repoUrl) : null
   if (!ref) throw badRequest('project has no GitHub repository')
   return ref
+}
+
+function toRepo(r: {
+  full_name: string
+  html_url: string
+  default_branch: string
+  private: boolean
+  description: string | null
+  pushed_at?: string | null
+}): GitHubRepo {
+  return { fullName: r.full_name, url: r.html_url, defaultBranch: r.default_branch, private: r.private, description: r.description, pushedAt: r.pushed_at ?? null }
 }
 
 /** Maps octokit failures to API errors with GitHub's message. */
@@ -64,20 +86,32 @@ export class GitHub {
     }
   }
 
-  async listRepos(query: string | undefined): Promise<GitHubRepo[]> {
+  /** One repository the token can read, whoever owns it; null when GitHub has no such repository. */
+  async repo(ref: RepoRef): Promise<GitHubRepo | null> {
     try {
-      const res = await this.octokit.repos.listForAuthenticatedUser({ sort: 'pushed', per_page: 100 })
+      return toRepo((await this.octokit.repos.get({ owner: ref.owner, repo: ref.repo })).data)
+    } catch (err) {
+      if (statusOf(err) === 404) return null
+      translate(err)
+    }
+  }
+
+  /**
+   * The token's own repositories matching `query`, newest push first. A query that names
+   * a repository (`owner/repo` or a GitHub URL) also looks that one up, so any repository
+   * the token can read can be picked, not only the ones it owns.
+   */
+  async listRepos(query: string | undefined): Promise<GitHubRepo[]> {
+    const ref = query ? parseRepoQuery(query) : null
+    try {
+      const [named, res] = await Promise.all([
+        ref ? this.repo(ref) : null,
+        this.octokit.repos.listForAuthenticatedUser({ sort: 'pushed', per_page: 100 }),
+      ])
       const q = query?.trim().toLowerCase()
-      return res.data
-        .filter((r) => !q || r.full_name.toLowerCase().includes(q))
-        .map((r) => ({
-          fullName: r.full_name,
-          url: r.html_url,
-          defaultBranch: r.default_branch,
-          private: r.private,
-          description: r.description,
-          pushedAt: r.pushed_at ?? null,
-        }))
+      const own = res.data.filter((r) => !q || r.full_name.toLowerCase().includes(q)).map(toRepo)
+      if (!named) return own
+      return [named, ...own.filter((r) => r.fullName.toLowerCase() !== named.fullName.toLowerCase())]
     } catch (err) {
       translate(err)
     }
