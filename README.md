@@ -66,4 +66,4 @@ container, so treat a sandbox as untrusted beyond its repo. on cloud hosts block
 
 ## license
 
-agpl-3.0. see `LICENSE`.
+mit. see `LICENSE`.
