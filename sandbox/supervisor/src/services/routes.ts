@@ -5,7 +5,7 @@ import { createManagedServiceRequestSchema, type ManagedServiceLogsFrame } from 
 import { HttpError, MiB, parseJson, readBody, sendEmpty, sendJson } from '../http.js'
 import type { ServiceManager } from './manager.js'
 
-const PATH_RE = /^\/services(?:\/([^/]+)(?:\/(start|stop|restart|logs))?)?$/
+const PATH_RE = /^\/managed-services(?:\/([^/]+)(?:\/(start|stop|restart|logs))?)?$/
 const LOGS_RE = /^\/managed-services\/([^/]+)\/logs$/
 const DEFAULT_LINES = 200
 const MAX_LINES = 10_000
@@ -18,7 +18,7 @@ export function parseLines(url: URL): number {
   return Math.min(n, MAX_LINES)
 }
 
-/** True when the request was a /services path (and has been answered). */
+/** True when the request was a /managed-services path (and has been answered). */
 export async function routeServices(manager: ServiceManager, req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
   const m = PATH_RE.exec(url.pathname)
   if (!m) return false
