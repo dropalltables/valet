@@ -53,7 +53,7 @@ With --command: register (or replace) the service and start it. Without: start a
   ensure: `Usage: valet services ensure [--json]
 Reconciles ${SANDBOX.servicesYaml} into the registered services and waits for each to answer.`,
   named: (verb: string) => `Usage: valet service ${verb} <name>`,
-  browser: 'Usage: valet url <port>',
+  url: 'Usage: valet url <port>',
 }
 
 // ---- transport -------------------------------------------------------------------
@@ -76,18 +76,18 @@ function api<T>(method: string, path: string, body?: unknown): Promise<T> {
           const status = res.statusCode ?? 0
           if (status === 204) return resolve(undefined as T)
           if (res.headers['content-type']?.startsWith('text/plain')) {
-            if (status >= 400) return reject(new CliError(text.trim() || `HTTP ${status}`))
+            if (status >= 400) return reject(new CliError(`${text.trim() || `HTTP ${status}`} (${method} ${path})`))
             return resolve(text as T)
           }
           let json: unknown
           try {
             json = JSON.parse(text)
           } catch {
-            return reject(new CliError(`supervisor answered ${status} without JSON`))
+            return reject(new CliError(`supervisor answered ${status} without JSON (${method} ${path})`))
           }
           if (status >= 400) {
             const error = (json as { error?: unknown }).error
-            return reject(new CliError(typeof error === 'string' ? error : `HTTP ${status}`))
+            return reject(new CliError(`${typeof error === 'string' ? error : `HTTP ${status}`} (${method} ${path})`))
           }
           resolve(json as T)
         })
@@ -304,9 +304,9 @@ async function servicesEnsure(args: string[]): Promise<number> {
   return reply.ok ? 0 : 1
 }
 
-function service(args: string[]): number {
-  const { positionals } = parse(args, {}, HELP.browser)
-  const port = Number(requireName(positionals, HELP.browser))
+function url(args: string[]): number {
+  const { positionals } = parse(args, {}, HELP.url)
+  const port = Number(requireName(positionals, HELP.url))
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new CliError('port must be 1-65535', 2)
   const template = process.env[SERVICE_ENV.urlTemplate]
   if (!template) throw new CliError(`${SERVICE_ENV.urlTemplate} is not set; service URLs are unavailable in this sandbox`)
@@ -344,7 +344,7 @@ async function main(argv: string[]): Promise<number> {
         default:
           throw new CliError(`unknown command: service ${verb}\n${HELP.root}`, 2)
       }
-    case 'managed-services':
+    case 'services':
       if (verb === undefined) return serviceList(rest)
       if (verb === 'ensure') return servicesEnsure(rest)
       if (verb === 'list') return serviceList(rest)
@@ -353,8 +353,8 @@ async function main(argv: string[]): Promise<number> {
         return 0
       }
       throw new CliError(`unknown command: services ${verb}\n${HELP.root}`, 2)
-    case 'service':
-      return service(verb === undefined ? [] : [verb, ...rest])
+    case 'url':
+      return url(verb === undefined ? [] : [verb, ...rest])
     default:
       throw new CliError(`unknown command: ${group}\n${HELP.root}`, 2)
   }
