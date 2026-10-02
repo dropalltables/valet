@@ -5,7 +5,7 @@ self-hosted cursor cloud agents / amp orbs / etc
 ## Requirements
 
 - linux server or mac with docker engine 24+ and compose v2
-- claude/codex sub or  anthropic/openai api key
+- claude/codex sub or anthropic/openai api key
 - github token for private repositories and pull requests (optional)
 
 ## Install
@@ -21,21 +21,20 @@ docker compose up -d --build
 
 Open http://localhost:3000, sign in with `VALET_PASSWORD`, and finish setup under Settings:
 
-1. claude code: run `claude setup-token` and paste in the token into the web app
-2. codex: click *Sign in with ChatGPT* or paste an api key
-3. github: paste a personal access token with `repo` scopes
-4. (optional): paste the App ID, private key, and webhook secret of a
-   GitHub App you own. Clone, push, and pull requests then use its installation tokens
-   instead of the token, and its webhook drives the pull request features below. Set the
-   App's webhook URL to the one Settings shows (`<VALET_BASE_URL>/api/webhooks/github`),
-   give it Contents and Pull requests read and write, Checks read, and Actions read, and
-   subscribe it to `check_run`, `check_suite`, `workflow_run`, `pull_request`,
-   `issue_comment`, and `pull_request_review_comment`.
+1. claude code: run `claude setup-token` and paste the token as an account
+2. codex: *Sign in with ChatGPT* or paste an api key
+3. github: paste a personal access token with `repo` scope
+4. github app (optional): app id, private key, webhook secret. clone, push and PRs then use
+   its installation tokens, and its webhook drives the PR features. webhook url is shown in
+   Settings; it needs Contents + Pull requests read/write, Checks + Actions read, and the
+   `check_run`, `check_suite`, `workflow_run`, `pull_request`, `issue_comment`,
+   `pull_request_review_comment` events
+5. several accounts per agent are fine; a thread runs under one and switches from its header
 
-to serve Valet on a domain, put a reverse proxy (Caddy, Traefik, nginx) in front of
-port 3000 and set `VALET_BASE_URL`. WebSockets must be proxied. Services (below) are
-subdomains, so also point a wildcard DNS record `*.valet.example.com` at the same box
-and issue a wildcard certificate. Caddy, with the DNS-challenge module for your provider:
+## Domain
+
+Reverse proxy port 3000, proxy websockets, set `VALET_BASE_URL`. Services are subdomains:
+point `*.valet.example.com` at the same box and issue a wildcard cert. Caddy:
 
 ```
 valet.example.com, *.valet.example.com {
@@ -46,259 +45,105 @@ valet.example.com, *.valet.example.com {
 }
 ```
 
-Traefik: route `HostRegexp(...)` matching `valet.example.com` and `t-*.valet.example.com`
-to the web service, and list `*.valet.example.com` under the certificate resolver's `domains`.
+## Coolify
 
-## Deploy on Coolify
-
-Coolify names the compose project after the resource UUID, so the network and volumes are
-`<uuid>_valet`, `<uuid>_repos`, `<uuid>_db-data`. Core reads its own container to find them,
-so leave `VALET_DOCKER_NETWORK` and `VALET_REPOS_VOLUME` unset.
-
-1. New resource, Docker Compose, this repository, compose file `docker-compose.yaml`.
-   To deploy published images instead of building on the server, use the compose files
-   `docker-compose.yaml,docker-compose.prebuilt.yaml` and set `VALET_IMAGE_PREFIX` to
-   `ghcr.io/<owner>/`, leaving `VALET_SANDBOX_IMAGE` empty (a value there overrides
-   the prefix).
-2. Environment variables: `POSTGRES_PASSWORD`, `VALET_SECRET_KEY`, `VALET_PASSWORD`,
-   `VALET_BASE_URL` (`https://valet.example.com`), `VALET_SERVICE_DOMAIN`
-   (`valet.example.com`), and `VALET_IMAGE_PREFIX` when deploying published images.
-3. Leave the domain field on `web` empty. Services need a wildcard host, which the domain
-   field cannot express, so the compose declares the Traefik router itself from
-   `VALET_SERVICE_DOMAIN`, `VALET_CERT_RESOLVER` and `VALET_PROXY_NETWORK`. Turn off "Escape
-   special characters in labels" in the application's advanced settings, or Docker Compose
-   never interpolates them. Coolify attaches its proxy to a network named after the
-   application's UUID, not to the stack's own `valet` network, so set `VALET_PROXY_NETWORK`
-   to that UUID or Traefik may route to an address it cannot reach.
-4. Wildcards need a DNS challenge, which Coolify's default `letsencrypt` resolver cannot do.
-   Add a resolver to Coolify's proxy (Server, Proxy, Configuration), name it in
-   `VALET_CERT_RESOLVER`, and restart the proxy. With Cloudflare:
+1. new resource, docker compose, this repo, `docker-compose.yaml`. for published images use
+   `docker-compose.yaml,docker-compose.prebuilt.yaml` with `VALET_IMAGE_PREFIX=ghcr.io/<owner>/`
+2. env: `POSTGRES_PASSWORD`, `VALET_SECRET_KEY`, `VALET_PASSWORD`, `VALET_BASE_URL`,
+   `VALET_SERVICE_DOMAIN`, `VALET_PROXY_NETWORK` (the app's uuid), `VALET_CERT_RESOLVER`
+3. leave the domain field empty; the compose declares the traefik router from those vars.
+   turn off "Escape special characters in labels" or they never interpolate
+4. wildcards need a dns challenge. add a resolver to the proxy config and name it in
+   `VALET_CERT_RESOLVER`. cloudflare:
 
    ```yaml
    services:
      traefik:
        environment:
-         - CF_DNS_API_TOKEN=<token with Zone:DNS:Edit on the zone>
+         - CF_DNS_API_TOKEN=<token with Zone:DNS:Edit>
        command:
-         # keep the existing flags, add these
          - '--certificatesresolvers.cfdns.acme.dnschallenge=true'
          - '--certificatesresolvers.cfdns.acme.dnschallenge.provider=cloudflare'
-         - '--certificatesresolvers.cfdns.acme.dnschallenge.resolvers=1.1.1.1:53,1.0.0.1:53'
          - '--certificatesresolvers.cfdns.acme.storage=/traefik/acme-cfdns.json'
    ```
 
-   Point `valet.example.com` and `*.valet.example.com` at the server.
-5. Core mounts `/var/run/docker.sock`, which Coolify allows as it stands.
-6. Core pulls the sandbox image on startup and every ten minutes, with progress in the log
-   and under Settings, so a newer published image reaches the next thread without a
-   redeploy. An image name without a registry host (the default `valet-sandbox:latest`) is
-   built on the host instead, with `docker compose --profile sandbox build`.
-
-The `images` workflow publishes `valet-core`, `valet-web` and `valet-sandbox` on every push to
-`main`, and rebuilds `valet-sandbox` daily: the sandbox installs the newest release of each
-agent CLI at build time, and the model lists Valet offers are whatever those CLIs report. From a fork, make the three packages public after its first run (Packages, Package
-settings, Change visibility): neither compose nor core sends registry credentials. Its
-`linux/arm64` jobs run on `ubuntu-24.04-arm`, which GitHub provides to public repositories only.
-
-## How it works
-
-```
-browser ── web (Next.js) ── core (API + orchestrator) ── Postgres
-                                   │ Docker socket
-                                   ├── sandbox: thread A  (container + volume)
-                                   ├── sandbox: thread B
-                                   └── ...
-```
-
-- **One container per thread.** Core creates it from the `valet-sandbox` image with a
-  persistent home volume, clones the repository on a new branch (`valet/<slug>-<id>`),
-  runs `.valet/setup` if the repo has one, and starts the agent CLI inside it.
-- **Pause and wake.** After `VALET_IDLE_PAUSE_MINUTES` without activity the container is
-  stopped. Files, installed packages, and the agent's session survive. The next message
-  starts it again and resumes the same agent session.
-- **Warm starts.** After `.valet/setup` succeeds, core snapshots that thread's home
-  volume for the project. A new thread starts from the snapshot when `.valet/setup`, the
-  lockfiles, and the base branch still hash to the same key: it fetches the base branch,
-  branches from it, runs `.valet/resume`, and skips setup. One snapshot per project; it
-  is rebuilt when the key changes and dropped after 7 days unused or when the total
-  passes `VALET_SNAPSHOT_MAX_GB`. Set `VALET_SNAPSHOTS=0` to turn it off.
-- **Transcript.** Core normalizes Claude Code's `stream-json` and Codex's app-server
-  protocol into one event log stored in Postgres and streamed to the browser over
-  WebSocket, so reloading or reconnecting never loses output.
-- **Usage.** Cost, tokens, and turns rolled up by project and by agent and model over
-  7 days, 30 days, or all time, with each agent's last reported rate-limit windows.
-  Codex reports no cost, so its rows show tokens and turns only.
-- **Permissions.** Each thread runs in one of its agent's own permission modes, chosen
-  when it is created, with a per-agent default under Settings. The container is the
-  sandbox, so the defaults skip prompts entirely (Claude `bypassPermissions`, Codex
-  `never`); in a mode that asks, the request pauses for approval in the transcript.
-- **MCP servers.** Servers added under Settings apply to every project or to selected
-  ones, and are written into the sandbox at launch: Claude Code gets a generated
-  `--mcp-config` file, Codex `[mcp_servers.*]` in its `config.toml`. Header and
-  environment values are encrypted at rest and written `0600` inside the container.
-  A repository's own `.mcp.json` is ignored unless *Load .mcp.json from repositories*
-  is on in Settings.
-- **Git.** GitHub credentials never sit in the container. Pushes and pull requests
-  run through core with a short-lived credential helper.
-- **Pull requests.** With a GitHub App configured, a failed check on a thread's pull
-  request messages the thread to fix it and push (once per commit, five per pull
-  request, switchable per thread in its header); a comment mentioning `@valet` from
-  someone GitHub reports as having write access to the repository is sent to the
-  thread; closing, reopening, or merging updates the thread's pull request state. A
-  project chooses whether a turn that ends with commits opens a pull request on its
-  own, whether merging archives the thread, and the default for the thread switch.
-- **Desktop and terminal.** Every sandbox runs a VNC desktop (Xfce, Chromium) and a
-  tmux session for the Terminal tab (the user's own shell, separate from the agent);
-  both are relayed through core, so no extra ports are exposed.
-- **Services.** Long-lived processes (dev servers, watchers) run as supervised
-  services inside the sandbox: the agent registers them with `valet service start`,
-  or the repository declares them in `.valet/services.yaml` (below). Services with a port get
-  `PORT` and `PUBLIC_URL`, restart when the sandbox wakes, and appear in the Services
-  tab with logs and Start, Stop, Restart, and Remove controls.
-- **Sharing.** Threads are private. *Share* in the thread header creates an unlisted
-  link at `/s/<token>`: a read-only page with the live transcript and the diff, no
-  composer, no terminal or desktop, no cost, and no login. *Revoke* invalidates every
-  link issued for the thread so far.
-- **Service URLs.** Every TCP port listening inside a running sandbox is reachable at
-  `http://t-<thread>-p<port>.localhost:3000` (or `https://t-<thread>-p<port>.<VALET_SERVICE_DOMAIN>`
-  on a server). The web app matches the hostname and forwards the whole request,
-  WebSockets included, through core into the sandbox, where the supervisor connects to
-  `127.0.0.1:<port>` with `Host: localhost:<port>`, so dev servers that bind to
-  localhost work unchanged. Browsers resolve `*.localhost` to loopback, so nothing
-  needs configuring locally. The Services tab lists the ports (named after the
-  service that owns them, else by an optional committed `.valet/ports.json`, e.g.
-  `{ "3000": "web" }`) and embeds one in a mini-browser; the agent knows the URL
-  template through `VALET_SERVICE_URL_TEMPLATE`.
-  With `VALET_PASSWORD` set, a service host gets its own cookie after a redirect
-  through the main host (logging out revokes those cookies), and *Share* issues
-  links that open one service for 1 hour to 7 days without a login. Request bodies
-  sent to a service are limited to 256 MB.
-- **Notifications.** A thread that needs input, finishes a turn, or errors notifies
-  through browser push (enabled per browser under Settings) and up to five outbound
-  webhooks (Slack, Discord, ntfy, or a signed JSON POST). Push needs `VALET_BASE_URL`
-  on HTTPS, except on localhost.
-- **Review.** HTML pages a service serves to you (not to share links) get a *Comment*
-  button: pick an element, write a note, and it arrives in the thread as a message
-  naming the page, the element's selector, and its text. Turn it off for a service
-  with `review: false` in `.valet/services.yaml`, or per response with an
-  `x-valet-review: off` header from the app. A page that sets `connect-src` must
-  allow `'self'` for the button to send.
+Leave `VALET_DOCKER_NETWORK` and `VALET_REPOS_VOLUME` unset; core finds them from its own
+container. Core pulls the sandbox image every ten minutes, so the daily rebuild (newest
+claude code and codex) reaches new threads on its own. From a fork, make the three
+packages public after the first `images` run.
 
 ## Project configuration
 
-Commit these to the repository:
+- `.valet/setup`: runs once after clone. idempotent
+- `.valet/services.yaml`: services to keep running (below)
+- `.valet/resume`: runs on every wake
 
-- `.valet/setup`: runs once after clone (install dependencies, build). Must be idempotent.
-  Anything it leaves running in its process group is stopped when it exits.
-- `.valet/services.yaml`: services to keep running (below).
-- `.valet/resume`: runs every time the container wakes, for one-off work that is not a service.
-
-Project environment variables and secrets are set in the project's settings page and
-are available to the scripts, the services, and the agent. Values of variables marked
-*Secret* are replaced with `[REDACTED:valet]` in the transcript before it is stored;
-the project's *Redact secret values in the transcript* switch turns that off.
-
-### Services
+Project env vars and secrets are set per project and reach the scripts, the services, and
+the agent. Secret values are redacted from the transcript.
 
 ```yaml
 services:
   web:
     command: npm run dev -- --port $PORT
-    cwd: apps/web            # default: the repository root
-    browser: true             # or { path: /docs, title: Docs }
-    health: /                # GET must answer 2xx/3xx before the service counts as ready
-    review: false            # keep the Comment button out of this service's pages
+    cwd: apps/web            # default: repo root
+    browser: true            # or { path: /docs, title: Docs }
+    health: /                # 2xx/3xx before it counts as ready
+    review: false            # no Comment button on its pages
   api:
     command: uv run uvicorn app:app --port $PORT
     port: 8000               # default: assigned from 30000-32767
     env:
       WEB_URL: ${services.web.publicURL}
   worker:
-    command: npm run worker  # no port: PORT and PUBLIC_URL are not set
+    command: npm run worker  # no port: PORT and PUBLIC_URL unset
 ```
 
-A service has a port when it sets `port`, `service`, or `health`. It runs as user
-`valet` in a login shell with the project environment, `PORT`, `PUBLIC_URL` (its service
-URL), `VALET_THREAD_ID`, and `VALET_SERVICE` set; it is restarted when it exits and
-started again when the sandbox wakes. Logs go to `~/.valet/logs/<name>.log`.
-`valet services ensure` applies the file; core runs it after `.valet/setup`, and the
-supervisor reconciles it again whenever the sandbox boots. Inside the sandbox the
-agent (and the Terminal tab) can also manage services ad hoc:
+A service gets a port when it sets `port`, `browser`, or `health`, and runs as `valet` with
+`PORT`, `PUBLIC_URL`, `VALET_THREAD_ID`, `VALET_SERVICE` set. Logs: `~/.valet/logs/<name>.log`.
+Inside the sandbox:
 
 ```sh
 valet service start web --command 'npm run dev -- --port $PORT' --browser
-valet service list
-valet service logs web -f
-valet service restart web
-valet service remove web
-valet url 8000            # the service URL for any port
+valet service list | logs web -f | restart web | remove web
+valet url 8000           # service url for any port
 ```
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `POSTGRES_PASSWORD` | required | Database password |
-| `VALET_SECRET_KEY` | required | Encrypts stored credentials; losing it loses them |
-| `VALET_PASSWORD` | empty | UI password; empty disables authentication |
-| `VALET_BASE_URL` | `http://localhost:3000` | Public URL used in pull request bodies and service URLs |
-| `VALET_SERVICE_DOMAIN` | host of `VALET_BASE_URL` | Services are served at `t-<thread>-p<port>.<domain>`; needs a wildcard DNS record on a server |
-| `VALET_BIND` | `127.0.0.1` | Host interface for the UI port |
-| `VALET_PORT` | `3000` | Host port for the UI |
-| `VALET_IMAGE_PREFIX` | empty | Registry prefix for the `valet-*` images, e.g. `ghcr.io/your-org/` |
-| `VALET_SANDBOX_IMAGE` | `${VALET_IMAGE_PREFIX}valet-sandbox:latest` | Image threads run in; core pulls it when it is missing and its name has a registry host |
-| `VALET_DOCKER_NETWORK` | discovered | Network sandboxes join; read from core's own container |
-| `VALET_REPOS_VOLUME` | discovered | Volume (or host path) holding bare repositories |
-| `VALET_IDLE_PAUSE_MINUTES` | `10` | Idle time before a container is stopped |
-| `VALET_SANDBOX_MEMORY` | `4g` | Memory limit per sandbox |
-| `VALET_SANDBOX_CPUS` | `2` | CPU limit per sandbox |
-| `VALET_SANDBOX_PIDS` | `2048` | Process limit per sandbox |
-| `VALET_MAX_RUNNING_SANDBOXES` | `8` | Running containers before new threads queue |
-| `VALET_SNAPSHOTS` | `1` | Reuse a per-project snapshot of `.valet/setup` for new threads |
-| `VALET_SNAPSHOT_MAX_GB` | `20` | Snapshot storage budget; least recently used snapshots go first |
+| `POSTGRES_PASSWORD` | required | database password |
+| `VALET_SECRET_KEY` | required | encrypts stored credentials; losing it loses them |
+| `VALET_PASSWORD` | empty | ui password; empty disables auth |
+| `VALET_BASE_URL` | `http://localhost:3000` | public url |
+| `VALET_SERVICE_DOMAIN` | host of `VALET_BASE_URL` | services live at `t-<thread>-p<port>.<domain>` |
+| `VALET_BIND` / `VALET_PORT` | `127.0.0.1` / `3000` | ui bind |
+| `VALET_IMAGE_PREFIX` | empty | registry prefix for `valet-*` images |
+| `VALET_SANDBOX_IMAGE` | `${VALET_IMAGE_PREFIX}valet-sandbox:latest` | image threads run in |
+| `VALET_IDLE_PAUSE_MINUTES` | `10` | idle time before a container is stopped |
+| `VALET_SANDBOX_MEMORY` / `_CPUS` / `_PIDS` | `4g` / `2` / `2048` | per-sandbox limits |
+| `VALET_MAX_RUNNING_SANDBOXES` | `8` | running containers before threads queue |
+| `VALET_SNAPSHOTS` / `VALET_SNAPSHOT_MAX_GB` | `1` / `20` | reuse a snapshot of `.valet/setup`; storage budget |
 
 ## Development
 
 ```sh
 bun install
 docker compose up -d db
-bun run dev:core   # http://localhost:8080
-bun run dev:web    # http://localhost:3000
+bun run dev:core   # :8080, needs the docker socket and the sandbox image
+bun run dev:web    # :3000
 ```
 
-Core needs the Docker socket and the sandbox image (`docker compose --profile sandbox build`).
-Running outside a container, it cannot discover its own network and volume, so set
-`VALET_DOCKER_NETWORK=valet_valet` and `VALET_REPOS_VOLUME=valet_repos`.
+Outside a container set `VALET_DOCKER_NETWORK=valet_valet` and `VALET_REPOS_VOLUME=valet_repos`.
 
-## Security notes
+## Security
 
-- Core holds the Docker socket, which is root-equivalent on the host. Do not expose
-  core directly; only `web` publishes a port.
-- Agents run as an unprivileged user inside their container with `sudo` available,
-  because installing packages is part of the job. Treat a sandbox as untrusted with
-  respect to the repository it was given, and nothing else.
-- Credentials are encrypted at rest with `VALET_SECRET_KEY` and injected into agent
-  processes as environment variables at spawn time, never written into the image.
-- Sandboxes run with no swap (`MemorySwap` equal to the memory limit), a process
-  limit (`VALET_SANDBOX_PIDS`), and without the `NET_RAW`, `AUDIT_WRITE`, `MKNOD`,
-  and `SYS_PTRACE` capabilities, so raw sockets (`ping`), device nodes, and process
-  tracing are unavailable inside a thread. `no-new-privileges` and a read-only root
-  filesystem are deliberately not set: both break `sudo` and `sudo apt-get install`,
-  which threads are meant to be able to use.
-- When a sandbox exceeds its memory limit the kernel kills the process that asked for
-  the memory, usually the agent or a build it started. The thread goes to *Error* with
-  the limit in the message and Wake starts it again.
-- Blocking the cloud metadata address needs a host rule, because a container cannot
-  be denied a route it can reach and nothing inside it may change the network. On a
-  cloud instance, add it once (it does not survive a reboot unless the distribution
-  persists iptables):
-
-  ```sh
-  iptables -I DOCKER-USER -d 169.254.169.254/32 -j DROP
-  ```
-
-  On AWS, `--http-tokens required --http-put-response-hop-limit 1` on the instance's
-  metadata options achieves the same thing for every container.
+- core holds the docker socket (root on the host). only `web` publishes a port
+- agents run as an unprivileged user with `sudo`; treat a sandbox as untrusted beyond its repo
+- credentials are encrypted with `VALET_SECRET_KEY` and injected at spawn, never baked in
+- sandboxes: no swap, pid limit, no `NET_RAW`/`AUDIT_WRITE`/`MKNOD`/`SYS_PTRACE`. oom kills
+  the offending process and the thread errors with the limit in the message
+- block cloud metadata on the host: `iptables -I DOCKER-USER -d 169.254.169.254/32 -j DROP`
 
 ## License
 
