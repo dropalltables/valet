@@ -88,7 +88,7 @@ function Composer({ threadId, status }: { threadId: string; status: ThreadStatus
           <PromptInputTools>
             <AttachButton disabled={!accepts} />
             {running && (
-              <div role="radiogroup" aria-label="Send mode" className="flex rounded-md border p-0.5 text-xs">
+              <div role="radiogroup" aria-label="Send mode" className="flex h-7 items-center rounded-[min(var(--radius-md),12px)] border p-0.5 text-[0.8rem]">
                 {(['queue', 'steer'] as const).map((m) => (
                   <button
                     key={m}
@@ -97,7 +97,7 @@ function Composer({ threadId, status }: { threadId: string; status: ThreadStatus
                     aria-checked={mode === m}
                     onClick={() => setMode(m)}
                     className={cn(
-                      'rounded-[5px] px-2 py-0.5',
+                      'h-full rounded-[min(var(--radius-sm),8px)] px-2',
                       mode === m ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground',
                     )}
                   >

@@ -53,6 +53,8 @@ import type { ProjectService } from '../projects/service.js'
 import type { SnapshotStore } from '../projects/snapshots.js'
 import type { SettingsService } from '../settings.js'
 import { titleFromPrompt, toListItem, toServices, toThread } from './mapper.js'
+import { cheapestModel, generateTitle } from './title.js'
+import type { ModelCatalog } from '../models/catalog.js'
 import {
   cloneRepo,
   fetchBaseKey,
@@ -141,6 +143,7 @@ export type ThreadServiceDeps = {
   serviceUrls: ServiceUrls
   mcp: McpServerStore
   redactor: SecretRedactor
+  catalog: ModelCatalog
 }
 
 const now = (): string => new Date().toISOString()
@@ -163,6 +166,7 @@ export class ThreadService {
   private readonly snapshots: SnapshotStore
   private readonly credentials: CredentialStore
   private readonly settings: SettingsService
+  private readonly catalog: ModelCatalog
   private readonly serviceUrls: ServiceUrls
   private readonly mcp: McpServerStore
   private readonly redactor: SecretRedactor
@@ -180,6 +184,7 @@ export class ThreadService {
     this.serviceUrls = deps.serviceUrls
     this.mcp = deps.mcp
     this.redactor = deps.redactor
+    this.catalog = deps.catalog
   }
 
   // ---- rows -----------------------------------------------------------------------
@@ -635,6 +640,7 @@ export class ThreadService {
       await this.patch(id, { repoReady: true })
       await this.setStatus(id, 'idle')
       if (first) await this.enqueueTurn(live, first)
+      void this.nameThread(live).catch((err: unknown) => log.warn('thread naming failed', { id, message: errorMessage(err) }))
     } catch (err) {
       // Aborted means delete/archive is next in the lock chain and owns the row from here.
       if (signal.aborted) log.info('provisioning aborted', { id })
@@ -642,6 +648,38 @@ export class ThreadService {
     } finally {
       if (live.provisionAbort === abort) live.provisionAbort = null
     }
+  }
+
+  /**
+   * Replaces the placeholder title cut from the prompt with one the cheapest model of the
+   * thread's agent writes, in the thread's own sandbox under its account. A title the
+   * user already changed is left alone.
+   */
+  private async nameThread(live: Live): Promise<void> {
+    const row = await this.row(live.id)
+    if (row.title !== titleFromPrompt(row.firstPrompt)) return
+    const sandbox = live.sandbox
+    if (!sandbox || !row.accountId) return
+    const model = cheapestModel(row.agent, (await this.catalog.all())[row.agent].models)
+    if (!model) return
+    const env: Record<string, string> = { HOME: SANDBOX.home }
+    if (row.agent === 'claude') {
+      const cred = await this.credentials.claudeEnvFor(row.accountId)
+      if (!cred) return
+      Object.assign(env, cred, { CLAUDE_CONFIG_DIR: SANDBOX.claudeConfigDir })
+    } else {
+      const auth = await this.credentials.codexAuthFor(row.accountId)
+      if (!auth) return
+      env.CODEX_HOME = SANDBOX.codexHome
+      if (auth.mode === 'api-key') env.CODEX_API_KEY = auth.apiKey
+    }
+    const title = await generateTitle({ runner: await this.ensureExec(live), supervisor: sandbox.supervisor, agent: row.agent, model, env, task: row.firstPrompt, threadId: row.id })
+    if (!title) return
+    const fresh = await this.row(live.id)
+    if (fresh.title !== row.title) return
+    const updated = await this.patch(live.id, { title })
+    this.events.publishThread(await this.listItem(updated))
+    log.info('thread named', { id: live.id, model })
   }
 
   /**

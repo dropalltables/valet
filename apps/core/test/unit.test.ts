@@ -16,6 +16,7 @@ import { diedOfMemory, isLocallyBuilt, reposVolumeName, soleNetworkName, toUsage
 import { parseCommits, parseNumstatZ, splitPatches } from '../src/git/changes.js'
 import { managedServicesReplySchema } from '@valet/shared'
 import { parseGitHubUrl, parseRepoQuery } from '../src/git/github.js'
+import { cheapestModel, cleanTitle } from '../src/threads/title.js'
 import { MAX_HTML_BYTES, allowInjectedScript, decodeHtml, injectWidget, injectionPoint, isInjectableHtml, reviewMessage } from '../src/services/review.js'
 import { titleFromPrompt } from '../src/threads/mapper.js'
 import type { GitRunner } from '../src/git/changes.js'
@@ -380,4 +381,23 @@ test('randomAccountName is noun-noun-number, within the name rules', () => {
     assert.match(name, /^[a-z]+-[a-z]+-(?:[1-9]|10)$/)
     assert.match(name, ACCOUNT_NAME_RE)
   }
+})
+
+test('cheapestModel picks the cheapest tier the CLI lists', () => {
+  const claude = [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }, { id: 'haiku', label: 'Haiku' }, { id: 'fable', label: 'Fable' }]
+  assert.equal(cheapestModel('claude', claude), 'haiku')
+  assert.equal(cheapestModel('claude', claude.filter((m) => m.id !== 'haiku')), 'sonnet')
+  assert.equal(cheapestModel('claude', [{ id: 'opus', label: 'Opus' }]), 'opus')
+  const codex = [{ id: 'gpt-6.1-sol', label: '' }, { id: 'gpt-6-astra', label: '' }, { id: 'gpt-5.5', label: '' }]
+  assert.equal(cheapestModel('codex', codex), 'gpt-5.5')
+  assert.equal(cheapestModel('codex', [...codex, { id: 'gpt-5.4-mini', label: '' }]), 'gpt-5.4-mini')
+  assert.equal(cheapestModel('codex', [{ id: 'gpt-5.4-mini', label: '' }, { id: 'gpt-5.4-nano', label: '' }]), 'gpt-5.4-nano')
+  assert.equal(cheapestModel('codex', []), null)
+})
+
+test('cleanTitle keeps one tidy line', () => {
+  assert.equal(cleanTitle('"Fix the idle timer."\n'), 'Fix the idle timer')
+  assert.equal(cleanTitle('\n\n  Add   rate limit headers  \nmore'), 'Add rate limit headers')
+  assert.equal(cleanTitle('   \n'), null)
+  assert.equal(cleanTitle('x'.repeat(80))?.length, 60)
 })

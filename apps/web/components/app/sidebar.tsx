@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
 import type { ThreadListItem, ThreadStatus } from '@valet/shared'
-import { PlusIcon } from 'lucide-react'
+import { ChartColumnIcon, FolderIcon, PlusIcon, SettingsIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { relativeTime, STATUS_LABELS } from '@/lib/format'
 import { useNow } from '@/lib/hooks'
@@ -84,15 +84,21 @@ export function Sidebar() {
           ))}
         </ul>
       </nav>
-      <div className="flex gap-1 border-t px-3 py-2 text-sm">
-        <Button asChild size="sm" variant={pathname.startsWith('/projects') ? 'secondary' : 'ghost'}>
-          <Link href="/projects">Projects</Link>
+      <div className="flex gap-1 border-t px-3 py-2">
+        <Button asChild size="icon-sm" variant={pathname.startsWith('/projects') ? 'secondary' : 'ghost'}>
+          <Link href="/projects" aria-label="Projects">
+            <FolderIcon />
+          </Link>
         </Button>
-        <Button asChild size="sm" variant={pathname === '/usage' ? 'secondary' : 'ghost'}>
-          <Link href="/usage">Usage</Link>
+        <Button asChild size="icon-sm" variant={pathname === '/usage' ? 'secondary' : 'ghost'}>
+          <Link href="/usage" aria-label="Usage">
+            <ChartColumnIcon />
+          </Link>
         </Button>
-        <Button asChild size="sm" variant={pathname === '/settings' ? 'secondary' : 'ghost'}>
-          <Link href="/settings">Settings</Link>
+        <Button asChild size="icon-sm" variant={pathname === '/settings' ? 'secondary' : 'ghost'}>
+          <Link href="/settings" aria-label="Settings">
+            <SettingsIcon />
+          </Link>
         </Button>
       </div>
     </aside>
