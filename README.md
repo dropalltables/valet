@@ -2,6 +2,8 @@
 
 self-hosted cursor cloud agents / amp orbs / etc
 
+![valet](docs/screenshots.png)
+
 ## requirements
 
 - linux server or mac with docker engine 24+ and compose v2
