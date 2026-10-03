@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   const credentials = new CredentialStore(db, cipher)
   const settings = new SettingsService(db, cfg, cipher)
   const snapshots = new SnapshotStore(db, cfg, docker, events)
-  const projects = new ProjectService(db, cipher, cfg, events, snapshots, redactor, async (repoUrl) => {
+  const projects = new ProjectService(db, cipher, cfg, events, snapshots, redactor, docker, async (repoUrl) => {
     const ref = parseGitHubUrl(repoUrl)
     if (!ref) return null
     const token = await credentials.githubTokenFor(ref)
@@ -62,13 +62,18 @@ async function main(): Promise<void> {
   const shares = new ThreadShares(cfg, cipher, threads)
   const deviceLogins = new DeviceLoginManager(db, docker, credentials, () => void catalog.refresh('codex'))
   const usage = new UsageService(db)
-  const auth = new Auth(cfg, cipher)
+  const auth = new Auth(cfg, cipher, db)
+  await auth.load()
   const serviceAuth = new ServiceAuth(cipher, auth.enabled, db)
   await serviceAuth.load()
   auth.onLogout(() => serviceAuth.revokeOwners())
   const services = new ServiceGateway({ cfg, urls: serviceUrls, serviceAuth, auth, threads })
+  auth.onLogout(async () => services.revokeOwnerConnections())
   const notifications = new NotificationService({ db, cfg, cipher, events, settings })
   notifications.watch()
+
+  // No request may provision a blank project until every old shared mount is gone.
+  await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
 
   const app = createApp({ version: pkg.version, cfg, db, auth, docker, events, credentials, deviceLogins, catalog, settings, notifications, projects, snapshots, threads, shares, services, usage, mcp })
   const server = serve({ fetch: app.fetch, port: cfg.PORT, hostname: '0.0.0.0' }, (info) => {
@@ -76,7 +81,6 @@ async function main(): Promise<void> {
   }) as Server
   attachWebSockets(server, { auth, events, threads, shares, services })
 
-  await threads.reconcile().catch((err: unknown) => log.error('reconcile failed', { err }))
   await deviceLogins.reconcile().catch((err: unknown) => log.error('device login reconcile failed', { err }))
   threads.startTimers()
   // A new sandbox image means new agent CLIs, whose model lists may differ.

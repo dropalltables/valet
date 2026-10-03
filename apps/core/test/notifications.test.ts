@@ -10,6 +10,7 @@ import {
   testNotification,
 } from '../src/notifications/payload.js'
 import { assertPostableUrl, pushSubscriptionSchema } from '../src/notifications/service.js'
+import { assertPublicAddress, pinnedLookup } from '../src/notifications/network.js'
 
 const base = 'https://valet.example.com'
 
@@ -150,11 +151,26 @@ test('core refuses to POST to addresses that only exist from inside the server',
     'http://localhost:3000/hook',
     'http://valet.localhost/hook',
     'http://169.254.169.254/latest/meta-data/',
+    'http://10.0.0.8/private',
+    'http://172.17.0.1/private',
+    'http://192.168.1.2/private',
+    'http://100.100.100.200/metadata',
     'http://0.0.0.0/hook',
     'http://[::1]:8080/hook',
     'http://[fe80::1]/hook',
+    'http://[fc00::1]/hook',
+    'http://user:pass@example.com/hook',
     'file:///etc/passwd',
   ]) {
     assert.throws(() => assertPostableUrl(url), { status: 400 }, url)
   }
+})
+
+test('notification DNS addresses reject private, link-local, and IPv4-mapped targets', async () => {
+  assertPublicAddress('8.8.8.8')
+  assertPublicAddress('2606:4700:4700::1111')
+  for (const address of ['127.0.0.1', '169.254.169.254', '10.0.0.1', '172.20.0.1', '192.168.0.1', '100.64.0.1', '::ffff:127.0.0.1', 'fc00::1', 'fe80::1']) {
+    assert.throws(() => assertPublicAddress(address), { status: 400 }, address)
+  }
+  await assert.rejects(pinnedLookup('http://127.0.0.1:8080'), { status: 400 })
 })

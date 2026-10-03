@@ -34,7 +34,7 @@ export class CodexRpc {
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`codex ${method}: no response within ${Math.round(timeoutMs / 1000)} s`))
+        reject(new Error(`codex ${method}: no response within ${Math.ceil(timeoutMs / 1000)} s`))
       }, timeoutMs)
       this.pending.set(id, { method, resolve, reject, timer })
       this.write({ id, method, params }).catch((err: unknown) => {

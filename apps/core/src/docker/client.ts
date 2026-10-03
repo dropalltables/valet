@@ -29,6 +29,8 @@ export const sandboxName = (threadId: string): string => `valet-sandbox-${thread
 export const volumeName = (threadId: string): string => `valet-home-${threadId}`
 /** `key` is the short snapshot key; the full one is only stored on the project row. */
 export const snapshotVolumeName = (projectId: string, key: string): string => `valet-snap-${projectId}-${key}`
+export const projectRepoVolumeName = (projectId: string): string => `valet-repo-${projectId}`
+export type TrustedGitOperation = 'clone' | 'fetch' | 'push'
 
 /** The daemon reports `CreatedAt` for every volume; dockerode's types leave it out. */
 export type SnapshotVolume = Docker.VolumeInspectInfo & { CreatedAt?: string }
@@ -38,6 +40,8 @@ export type SandboxSpec = {
   projectId: string
   token: string
   volume: string
+  /** Blank projects get one repository volume; GitHub projects have no repository mount. */
+  repoVolume?: string
   /** `http://t-<thread>-p{port}.<domain>`, exported to shells in the container. */
   serviceUrlTemplate: string
 }
@@ -377,6 +381,102 @@ export class DockerClient {
     }
   }
 
+  private readonly projectRepoMigrations = new Map<string, Promise<string>>()
+
+  /** Migrate the old shared bare repository exactly once, retrying incomplete copies. */
+  async ensureProjectRepoVolume(projectId: string): Promise<string> {
+    const pending = this.projectRepoMigrations.get(projectId)
+    if (pending) return pending
+    const migration = this.migrateProjectRepoVolume(projectId)
+    this.projectRepoMigrations.set(projectId, migration)
+    try {
+      return await migration
+    } finally {
+      this.projectRepoMigrations.delete(projectId)
+    }
+  }
+
+  private async migrateProjectRepoVolume(projectId: string): Promise<string> {
+    for (const sandbox of await this.listManaged()) {
+      if (await this.hasSharedReposMount(sandbox.Id)) {
+        throw new Error('cannot migrate repositories while a legacy shared-repository sandbox still exists')
+      }
+    }
+    const target = projectRepoVolumeName(projectId)
+    await this.ensureVolume(target, { [LABEL_PROJECT]: projectId })
+    const { reposVolume } = await this.environment()
+    const container = await this.docker.createContainer({
+      Image: this.cfg.VALET_SANDBOX_IMAGE,
+      name: `valet-repo-migrate-${projectId}-${shortHex()}`,
+      User: '0:0',
+      Entrypoint: ['/bin/sh', '-c'],
+      Cmd: ['set -eu; if [ ! -f /repo/.valet-migrated ]; then test -d "/legacy/$1.git"; cp -a "/legacy/$1.git/." /repo/; touch /repo/.valet-migrated; fi', 'valet-migrate', projectId],
+      Labels: { [LABEL_HELPER]: 'true', [LABEL_PROJECT]: projectId },
+      HostConfig: { Binds: [`${reposVolume}:/legacy:ro`, `${target}:/repo`], NetworkMode: 'none', AutoRemove: false },
+    })
+    try {
+      await container.start()
+      const result = await container.wait()
+      if (result.StatusCode !== 0) throw new Error(`repository migration exited with ${result.StatusCode}`)
+    } finally {
+      await container.remove({ force: true }).catch(() => undefined)
+    }
+    return target
+  }
+
+  /** Only a fresh, private repository can perform network Git with credentials. */
+  async trustedGit(volume: string, operation: TrustedGitOperation, url: string, branch: string, token: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    const remote = new URL(url)
+    if (remote.protocol !== 'https:' || remote.hostname !== 'github.com' || remote.username !== 'x-access-token' || remote.password || remote.port || !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git$/.test(remote.pathname)) {
+      throw new Error('invalid GitHub repository URL')
+    }
+    const script = `set -eu
+umask 077
+mkdir -p /tmp/valet-git /tmp/valet-templates
+git check-ref-format "refs/heads/$3"
+printf '%s\\n' '#!/bin/sh' 'printf "%s\\n" "$VALET_GIT_TOKEN"' > /tmp/valet-askpass
+chmod 700 /tmp/valet-askpass
+case "$1" in
+  clone)
+    git -c protocol.allow=never -c protocol.https.allow=always clone --no-local --branch "$3" -- "$2" /tmp/valet-git/repo
+    unset VALET_GIT_TOKEN GIT_ASKPASS
+    cp -a /tmp/valet-git/repo/. "${SANDBOX.repo}/"
+    ;;
+  fetch)
+    git init --bare /tmp/valet-git/repo.git
+    git -C /tmp/valet-git/repo.git -c protocol.allow=never -c protocol.https.allow=always fetch --no-tags -- "$2" "refs/heads/$3:refs/heads/valet-base"
+    unset VALET_GIT_TOKEN GIT_ASKPASS
+    git -C "${SANDBOX.repo}" -c protocol.allow=never -c protocol.file.allow=always fetch --force --no-tags -- /tmp/valet-git/repo.git refs/heads/valet-base
+    ;;
+  push)
+    printf '%s' "$VALET_GIT_TOKEN" > /tmp/valet-git/token
+    unset VALET_GIT_TOKEN GIT_ASKPASS
+    git init --bare /tmp/valet-git/repo.git
+    git -C /tmp/valet-git/repo.git -c protocol.allow=never -c protocol.file.allow=always fetch --no-tags -- "${SANDBOX.repo}" "refs/heads/$3:refs/heads/valet-push"
+    VALET_GIT_TOKEN="$(cat /tmp/valet-git/token)" GIT_ASKPASS=/tmp/valet-askpass git -C /tmp/valet-git/repo.git -c protocol.allow=never -c protocol.https.allow=always push --no-verify -- "$2" "refs/heads/valet-push:refs/heads/$3"
+    ;;
+  *) exit 2 ;;
+esac`
+    const container = await this.docker.createContainer({
+      Image: this.cfg.VALET_SANDBOX_IMAGE,
+      name: `valet-git-${shortHex()}`,
+      User: '1000:1000',
+      Entrypoint: ['/bin/sh', '-c'],
+      Cmd: [script, 'valet-git', operation, url, branch],
+      Env: [`VALET_GIT_TOKEN=${token}`, 'GIT_ASKPASS=/tmp/valet-askpass', 'GIT_TERMINAL_PROMPT=0', 'GIT_CONFIG_GLOBAL=/dev/null', 'GIT_CONFIG_SYSTEM=/dev/null', 'GIT_TEMPLATE_DIR=/tmp/valet-templates'],
+      Labels: { [LABEL_HELPER]: 'true' },
+      HostConfig: { Binds: [`${volume}:${SANDBOX.home}`], NetworkMode: (await this.environment()).network, AutoRemove: false, Init: true, Memory: HELPER_MEMORY, PidsLimit: HELPER_PIDS },
+    })
+    try {
+      await container.start()
+      const result = await waitFor(container, signal)
+      if (result.StatusCode !== 0) throw new Error(`git ${operation} exited with ${result.StatusCode}`)
+    } finally {
+      await container.remove({ force: true }).catch(() => undefined)
+    }
+  }
+
   private async runCopy(from: string, to: string, labels: Record<string, string>, signal?: AbortSignal): Promise<number> {
     signal?.throwIfAborted()
     const container = await this.docker.createContainer({
@@ -435,7 +535,7 @@ export class DockerClient {
       Labels: { [LABEL_THREAD]: spec.threadId, [LABEL_PROJECT]: spec.projectId, [LABEL_MANAGED]: 'true' },
       HostConfig: {
         NetworkMode: env.network,
-        Binds: [`${spec.volume}:${SANDBOX.home}`, `${env.reposVolume}:${SANDBOX.reposMount}`],
+        Binds: [`${spec.volume}:${SANDBOX.home}`, ...(spec.repoVolume ? [`${spec.repoVolume}:${SANDBOX.reposMount}`] : [])],
         Memory: this.cfg.VALET_SANDBOX_MEMORY,
         // Equal to Memory means no swap, so a runaway process is OOM-killed instead of thrashing.
         MemorySwap: this.cfg.VALET_SANDBOX_MEMORY,
@@ -449,6 +549,12 @@ export class DockerClient {
       },
     })
     return container.id
+  }
+
+  /** True for containers created before repositories were isolated per project. */
+  async hasSharedReposMount(id: string): Promise<boolean> {
+    const info = await this.docker.getContainer(id).inspect()
+    return info.Mounts.some((mount) => mount.Destination === SANDBOX.reposMount && mount.Name !== projectRepoVolumeName(info.Config.Labels?.[LABEL_PROJECT] ?? ''))
   }
 
   /** Short-lived container from the sandbox image with no volumes (Codex device login, model list refresh). */

@@ -79,7 +79,6 @@ services:
     stop_grace_period: 10s
     environment:
       VALET_CORE_URL: http://core:8080
-      VALET_SECRET_KEY: ${VALET_SECRET_KEY}
       VALET_PASSWORD: ${VALET_PASSWORD:-}
       VALET_BASE_URL: ${VALET_BASE_URL:-http://localhost:3000}
       VALET_SERVICE_DOMAIN: ${VALET_SERVICE_DOMAIN:-}

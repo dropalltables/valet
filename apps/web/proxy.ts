@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { parseServiceHost, serviceDomain } from '@valet/shared'
+import { GITHUB_WEBHOOK_PATH, parseServiceHost, serviceDomain } from '@valet/shared'
 
 /** Sent to core so it knows the host the browser used (Next rewrites Host to core's). */
 const SERVICE_HOST_HEADER = 'x-valet-service-host'
+const API_MAX_BYTES = 1024 * 1024
+const GITHUB_WEBHOOK_MAX_BYTES = 25 * 1024 * 1024
 
 /**
  * Three jobs, all needing request-time environment:
@@ -18,7 +20,7 @@ const SERVICE_HOST_HEADER = 'x-valet-service-host'
  *    go to /login, except `/s/<token>` (an unlisted thread link, which carries its
  *    own credential). Core verifies the cookie; this only checks presence.
  */
-export function proxy(request: NextRequest): NextResponse {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   const { pathname, search } = request.nextUrl
   const core = process.env.VALET_CORE_URL ?? 'http://localhost:8080'
 
@@ -31,6 +33,22 @@ export function proxy(request: NextRequest): NextResponse {
   }
 
   if (pathname === '/api' || pathname.startsWith('/api/')) {
+    const maxBytes = pathname === GITHUB_WEBHOOK_PATH ? GITHUB_WEBHOOK_MAX_BYTES : API_MAX_BYTES
+    const length = Number(request.headers.get('content-length') ?? '0')
+    if (Number.isFinite(length) && length > maxBytes) return NextResponse.json({ error: 'request body too large' }, { status: 413 })
+    if (request.body) {
+      const reader = request.clone().body!.getReader()
+      let received = 0
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        received += value.byteLength
+        if (received > maxBytes) {
+          void reader.cancel().catch(() => undefined)
+          return NextResponse.json({ error: 'request body too large' }, { status: 413 })
+        }
+      }
+    }
     return NextResponse.rewrite(new URL(pathname + search, core))
   }
 

@@ -222,7 +222,19 @@ export const webhooks = pgTable('webhooks', {
 export const authState = pgTable('auth_state', {
   id: text('id').primaryKey(),
   serviceOwnerGeneration: integer('service_owner_generation').notNull().default(0),
+  passwordFingerprint: text('password_fingerprint'),
 })
+
+/** Main-UI login sessions. Only a SHA-256 digest of the random bearer token is stored. */
+export const authSessions = pgTable(
+  'auth_sessions',
+  {
+    tokenHash: text('token_hash').primaryKey(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('auth_sessions_expires_at_idx').on(t.expiresAt)],
+)
 
 export const deviceLogins = pgTable('device_logins', {
   id: text('id').primaryKey(),

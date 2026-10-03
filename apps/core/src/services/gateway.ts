@@ -17,7 +17,7 @@ import {
   type ShareServiceResponse,
 } from '@valet/shared'
 import { z } from 'zod'
-import type { Auth } from '../auth.js'
+import { parseCookie, type Auth } from '../auth.js'
 import type { Config } from '../config.js'
 import type { SupervisorClient } from '../docker/supervisor-client.js'
 import { HttpError } from '../errors.js'
@@ -308,7 +308,29 @@ function sendUpstream(req: ClientRequest, body: Readable | null): Promise<Incomi
  * bootstrap on the service host, and `/api/service-auth` on the main host.
  */
 export class ServiceGateway {
+  private readonly ownerSockets = new Set<Duplex>()
+  private readonly guestSockets = new Map<string, Set<Duplex>>()
+
   constructor(private readonly deps: GatewayDeps) {}
+
+  revokeOwnerConnections(): void {
+    for (const socket of this.ownerSockets) socket.destroy()
+  }
+
+  private trackGuest(socket: Duplex, cookieHeader: string | undefined, threadId: string, port: number): void {
+    const key = `${threadId}:${port}`
+    const sockets = this.guestSockets.get(key) ?? new Set<Duplex>()
+    this.guestSockets.set(key, sockets)
+    sockets.add(socket)
+    const expiry = Number(/^s\.\d+\.(\d+)\./.exec(parseCookie(cookieHeader)[SERVICE_COOKIE] ?? '')?.[1])
+    const timer = setTimeout(() => socket.destroy(), Math.max(1, expiry - Date.now()))
+    timer.unref()
+    socket.once('close', () => {
+      clearTimeout(timer)
+      sockets.delete(socket)
+      if (sockets.size === 0) this.guestSockets.delete(key)
+    })
+  }
 
   routes(): Hono<{ Bindings: HttpBindings }> {
     const app = new Hono<{ Bindings: HttpBindings }>()
@@ -322,7 +344,7 @@ export class ServiceGateway {
    * Main host: the browser has `valet_session` here. Turns it into a one-time token
    * for exactly the service in `return`, so the service host can set its own cookie.
    */
-  private startAuth(c: Context): Response {
+  private async startAuth(c: Context): Promise<Response> {
     const ret = c.req.query('return') ?? ''
     let target: URL
     try {
@@ -332,7 +354,7 @@ export class ServiceGateway {
     }
     const service = this.deps.urls.parse(target.host)
     if (!service || target.protocol !== `${this.deps.urls.scheme}:`) return c.html(deniedPage('Invalid return URL'), 400)
-    if (!this.deps.auth.authorizedCookieHeader(c.req.header('cookie'))) {
+    if (!(await this.deps.auth.authorizedCookieHeader(c.req.header('cookie')))) {
       const login = new URL('/login', this.deps.cfg.VALET_BASE_URL)
       login.searchParams.set('next', `/api/service-auth?return=${encodeURIComponent(ret)}`)
       return c.redirect(login.toString(), 302)
@@ -368,9 +390,15 @@ export class ServiceGateway {
     const path = route.rest.split('?', 1)[0] ?? '/'
 
     if (path === SERVICE_AUTH_PATH) {
-      const token = this.deps.serviceAuth.read(url.searchParams.get('token') ?? '')
+      const raw = url.searchParams.get('token') ?? ''
+      const token = this.deps.serviceAuth.read(raw)
       if (!token || token.t !== route.threadId || token.p !== route.port) return c.html(deniedPage('This link is invalid or has expired'), 403)
       if (token.s === 'share' && token.g !== generation) return c.html(deniedPage('This link has been revoked'), 403)
+      c.header('Cache-Control', 'no-store')
+      c.header('Referrer-Policy', 'no-referrer')
+      if (!this.deps.serviceAuth.consumeOwnerToken(raw, token) && this.deps.serviceAuth.grant(c.req.header('cookie'), route.host, generation) !== 'owner') {
+        return c.html(deniedPage('This link has already been used'), 403)
+      }
       if (this.deps.serviceAuth.enabled) {
         const cookie = this.deps.serviceAuth.cookie(route.host, token)
         // Cross-site service hosts (`*.localhost`) are only reachable from the Services
@@ -396,6 +424,14 @@ export class ServiceGateway {
       const login = new URL('/api/service-auth', this.deps.cfg.VALET_BASE_URL)
       login.searchParams.set('return', route.origin + route.rest)
       return c.redirect(login.toString(), 302)
+    }
+
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+      const origin = c.req.header('origin')
+      const fetchSite = c.req.header('sec-fetch-site')
+      if ((origin && origin !== route.origin) || (!origin && fetchSite !== undefined && fetchSite !== 'none')) {
+        return c.json({ error: 'forbidden origin' }, 403)
+      }
     }
 
     if (path === SERVICE_WAKE_PATH) {
@@ -539,10 +575,20 @@ export class ServiceGateway {
       reject(401, 'Unauthorized')
       return
     }
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
+    const fetchSite = typeof req.headers['sec-fetch-site'] === 'string' ? req.headers['sec-fetch-site'] : undefined
+    if (grant === 'owner' && ((origin && origin !== route.origin) || (!origin && fetchSite !== undefined && fetchSite !== 'none'))) {
+      reject(403, 'Forbidden')
+      return
+    }
     if (target.kind === 'stopped') {
       reject(503, 'ManagedService Unavailable')
       return
     }
+    if (grant === 'owner') {
+      this.ownerSockets.add(socket)
+      socket.once('close', () => this.ownerSockets.delete(socket))
+    } else this.trackGuest(socket, req.headers.cookie, route.threadId, route.port)
     const upstreamTarget = target.supervisor.serviceTarget(route.port, route.rest)
     const headers = forwardHeaders(incomingToHeaders(req.headers), {
       route,
@@ -573,6 +619,8 @@ export class ServiceGateway {
       socket.pipe(upSocket).pipe(socket)
       upSocket.on('error', () => socket.destroy())
       socket.on('error', () => upSocket.destroy())
+      socket.once('close', () => upSocket.destroy())
+      upSocket.once('close', () => socket.destroy())
     })
     upstream.on('response', (res) => {
       const lines = [`HTTP/1.1 ${res.statusCode ?? 502} ${res.statusMessage ?? ''}`]
@@ -627,5 +675,6 @@ export class ServiceGateway {
   async revoke(threadId: string, port: number): Promise<void> {
     const current = await this.deps.threads.serviceShare(threadId, port)
     await this.deps.threads.setServiceShare(threadId, port, { generation: current.generation + 1, expiresAt: null })
+    for (const socket of this.guestSockets.get(`${threadId}:${port}`) ?? []) socket.destroy()
   }
 }

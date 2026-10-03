@@ -9,6 +9,7 @@ import type { Config } from '../config.js'
 import { maskSecret, type Cipher } from '../crypto.js'
 import type { Db } from '../db/index.js'
 import { projectEnvVars, projects, threads, type ProjectRow } from '../db/schema.js'
+import { projectRepoVolumeName, type DockerClient } from '../docker/client.js'
 import { badRequest, conflict, notFound } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import type { SecretRedactor } from '../events/redact.js'
@@ -45,6 +46,7 @@ export class ProjectService {
     private readonly events: EventLog,
     private readonly snapshots: SnapshotStore,
     private readonly redactor: SecretRedactor,
+    private readonly docker: DockerClient,
     private readonly lookupDefaultBranch: (repoUrl: string) => Promise<string | null>,
   ) {}
 
@@ -159,6 +161,7 @@ export class ProjectService {
     await this.db.delete(projects).where(eq(projects.id, id))
     if (row.source === 'blank') {
       await fs.rm(this.bareRepoPath(id), { recursive: true, force: true }).catch((err) => log.warn('failed to remove bare repo', { id, err }))
+      await this.docker.removeVolume(projectRepoVolumeName(id)).catch((err) => log.warn('failed to remove project repository volume', { id, err }))
     }
     this.events.publishProjectDeleted(id)
   }

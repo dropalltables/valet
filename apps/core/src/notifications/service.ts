@@ -1,4 +1,5 @@
-import { isIP } from 'node:net'
+import { request as httpRequest } from 'node:http'
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { asc, eq } from 'drizzle-orm'
 import webpush from 'web-push'
 import { z } from 'zod'
@@ -20,7 +21,10 @@ import type { EventLog } from '../events/log.js'
 import { newId } from '../ids.js'
 import { errorMessage, logger } from '../logger.js'
 import type { SettingsService } from '../settings.js'
+import { assertPostableUrl, pinnedLookup } from './network.js'
 import { buildNotification, buildPushPayload, buildWebhookRequest, notificationEvent, testNotification, type Notification } from './payload.js'
+
+export { assertPostableUrl } from './network.js'
 
 const log = logger('notifications')
 
@@ -138,6 +142,7 @@ export class NotificationService {
 
   async subscribe(sub: { endpoint: string; keys: { p256dh: string; auth: string } }): Promise<void> {
     assertPostableUrl(sub.endpoint)
+    if (new URL(sub.endpoint).protocol !== 'https:') throw badRequest('push endpoint must use HTTPS')
     await this.db
       .insert(pushSubscriptions)
       .values({ endpoint: sub.endpoint, p256dh: sub.keys.p256dh, auth: sub.keys.auth })
@@ -190,9 +195,13 @@ export class NotificationService {
 
   private async pushOne(row: PushSubscriptionRow, payload: string, keys: { publicKey: string; privateKey: string }): Promise<string | null> {
     try {
+      if (!row.endpoint.startsWith('https://')) throw badRequest('push endpoint must use HTTPS')
+      const agent = new HttpsAgent({ lookup: await pinnedLookup(row.endpoint) })
       await webpush.sendNotification({ endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } }, payload, {
         TTL: PUSH_TTL_SECONDS,
         vapidDetails: { subject: vapidSubject(this.cfg.VALET_BASE_URL), ...keys },
+        agent,
+        timeout: WEBHOOK_TIMEOUT_MS,
       })
       return null
     } catch (err) {
@@ -217,17 +226,25 @@ export class NotificationService {
 
   private async postWebhook(row: WebhookRow, n: Notification): Promise<void> {
     const req = buildWebhookRequest(row.kind, row.secretEnc ? this.cipher.decrypt(row.secretEnc) : null, n)
-    const res = await fetch(this.cipher.decrypt(row.urlEnc), {
-      method: 'POST',
-      headers: req.headers,
-      body: req.body,
-      // The URL was checked when it was stored; a redirect would send the request
-      // somewhere that was never checked, so a 3xx counts as a failure.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+    const raw = this.cipher.decrypt(row.urlEnc)
+    const url = new URL(raw)
+    const address = await pinnedLookup(raw, row.kind === 'ntfy')
+    await new Promise<void>((resolve, reject) => {
+      const send = url.protocol === 'https:' ? httpsRequest : httpRequest
+      const request = send(url, { method: 'POST', headers: req.headers, lookup: address }, (response) => {
+        // Do not follow redirects or expose response bodies to the UI.
+        clearTimeout(timer)
+        response.destroy()
+        if ((response.statusCode ?? 500) >= 200 && (response.statusCode ?? 500) < 300) resolve()
+        else reject(new Error(`HTTP ${response.statusCode}`))
+      })
+      const timer = setTimeout(() => request.destroy(new Error('webhook timed out')), WEBHOOK_TIMEOUT_MS)
+      request.on('error', (err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+      request.end(req.body)
     })
-    // Only the status: the response body would reflect whatever core can reach back into the UI.
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
   }
 
   // ---- tests ------------------------------------------------------------------------
@@ -265,32 +282,6 @@ function maskUrl(raw: string): string {
 
 function base64UrlBytes(value: string): number {
   return Buffer.from(value, 'base64url').length
-}
-
-/**
- * Core POSTs to operator-supplied URLs, so the addresses that only exist from inside
- * the server are refused: its own loopback, the unspecified address, and the
- * link-local range cloud metadata services live on.
- */
-export function assertPostableUrl(raw: string): void {
-  const url = new URL(raw)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw badRequest(`unsupported URL scheme: ${url.protocol}`)
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  if (isInternalHost(host)) throw badRequest(`unroutable host: ${url.hostname}`)
-}
-
-function isInternalHost(host: string): boolean {
-  switch (isIP(host)) {
-    case 4: {
-      const [a, b] = host.split('.').map(Number)
-      return a === 0 || a === 127 || (a === 169 && b === 254)
-    }
-    case 6:
-      // ::, ::1, and fe80::/10.
-      return host === '::' || host === '::1' || /^fe[89ab]/.test(host)
-    default:
-      return host === 'localhost' || host.endsWith('.localhost')
-  }
 }
 
 /** RFC 8292 requires an `https:` or `mailto:` contact; a local base URL is neither. */

@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { SANDBOX, type RunReply } from '@valet/shared'
 import type { ExecSocket, SupervisorClient } from '../docker/supervisor-client.js'
 import type { CodexAuthJson, CredentialStore } from '../credentials/store.js'
-import { withAskpass } from '../git/askpass.js'
 import { git, type GitRunner } from '../git/changes.js'
 import { claudeMcpConfig, codexConfigToml, type ResolvedMcpServer } from '../mcp/config.js'
 import { errorMessage } from '../logger.js'
@@ -37,11 +36,15 @@ export async function repoExists(supervisor: SupervisorClient): Promise<boolean>
   return reply?.code === 0
 }
 
-export type CloneSource = { kind: 'github'; url: string; token: string | null } | { kind: 'blank'; path: string }
+export type CloneSource = { kind: 'github'; url: string; token: string | null; trustedGit: (operation: 'clone' | 'fetch', branch: string) => Promise<void> } | { kind: 'blank'; path: string }
 
 export async function cloneRepo(supervisor: SupervisorClient, source: CloneSource, baseBranch: string, signal?: AbortSignal): Promise<void> {
   await supervisor.run({ argv: ['rm', '-rf', SANDBOX.repo] }, signal)
   await supervisor.fsMkdir(`${SANDBOX.home}/workspace`)
+  if (source.kind === 'github' && source.token) {
+    await source.trustedGit('clone', baseBranch)
+    return
+  }
   const clone = async (env: Record<string, string>): Promise<RunReply> => {
     const url = source.kind === 'github' ? source.url : source.path
     return git(
@@ -51,8 +54,7 @@ export async function cloneRepo(supervisor: SupervisorClient, source: CloneSourc
       { timeoutMs: CLONE_TIMEOUT_MS },
     )
   }
-  if (source.kind === 'github') await withAskpass(supervisor, source.token, clone)
-  else await clone({})
+  await clone({ GIT_TERMINAL_PROMPT: '0' })
 }
 
 /**
@@ -130,10 +132,13 @@ export async function fetchBaseKey(
   signal?: AbortSignal,
 ): Promise<string> {
   const run = repoGit(supervisor, {}, signal)
+  if (source.kind === 'github' && source.token) {
+    await source.trustedGit('fetch', baseBranch)
+    return readSnapshotKey(run, 'FETCH_HEAD', baseBranch)
+  }
   const fetch = async (env: Record<string, string>): Promise<RunReply> =>
     git((argv, opts) => run(argv, { ...opts, env }), ['fetch', '--force', 'origin', baseBranch], { timeoutMs: CLONE_TIMEOUT_MS })
-  if (source.kind === 'github') await withAskpass(supervisor, source.token, fetch)
-  else await fetch({})
+  await fetch({ GIT_TERMINAL_PROMPT: '0' })
   return readSnapshotKey(run, 'FETCH_HEAD', baseBranch)
 }
 

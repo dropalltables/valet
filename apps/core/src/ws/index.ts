@@ -59,6 +59,10 @@ function route(url: URL): Route | null {
 
 export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true })
+  const ownerSockets = new Set<WebSocket>()
+  deps.auth.onLogout(async () => {
+    for (const ws of ownerSockets) ws.terminate()
+  })
 
   const reject = (socket: Duplex, status: string): void => {
     socket.write(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`)
@@ -68,6 +72,7 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
   // An exception thrown from an 'upgrade' listener is uncaught and would end the
   // process, so everything here runs inside the try.
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    void (async () => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost')
       const target = route(url)
@@ -100,11 +105,17 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
         )
         return
       }
-      if (!deps.auth.authorizedUpgrade(req)) {
+      if (!deps.auth.originAllowed(typeof req.headers.origin === 'string' ? req.headers.origin : undefined, typeof req.headers['sec-fetch-site'] === 'string' ? req.headers['sec-fetch-site'] : undefined)) {
+        reject(socket, '403 Forbidden')
+        return
+      }
+      if (!(await deps.auth.authorizedUpgrade(req))) {
         reject(socket, '401 Unauthorized')
         return
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
+        ownerSockets.add(ws)
+        ws.on('close', () => ownerSockets.delete(ws))
         switch (target.kind) {
           case 'global':
             serveGlobal(ws, deps)
@@ -124,6 +135,7 @@ export function attachWebSockets(server: Server, deps: WsDeps): WebSocketServer 
       log.warn('upgrade rejected', { url: req.url, message: errorMessage(err) })
       if (!socket.destroyed) reject(socket, '400 Bad Request')
     }
+    })()
   })
 
   return wss

@@ -40,7 +40,6 @@ import { waitForSupervisor, type ExecSocket, type SupervisorClient } from '../do
 import { HttpError, badRequest, conflict, notFound } from '../errors.js'
 import type { EventLog } from '../events/log.js'
 import { loadProjectSecrets, redactString, type SecretRedactor } from '../events/redact.js'
-import { withAskpass } from '../git/askpass.js'
 import { computeChanges, git, type GitRunner } from '../git/changes.js'
 import { GitHub, canonicalRepoUrl, cloneUrl, parseGitHubUrl, requireRepoRef } from '../git/github.js'
 import { ciFixDecision, ciFixMessage, commentMessage, type WebhookIntent } from '../git/webhook.js'
@@ -521,6 +520,10 @@ export class ThreadService {
 
     let containerId = row.containerId
     let state = containerId ? await this.docker.inspect(containerId) : null
+    if (state && (await this.docker.hasSharedReposMount(state.id))) {
+      await this.docker.remove(state.id)
+      state = null
+    }
     // A stopped container from a superseded image would wake with the old supervisor; the volume carries everything that matters.
     if (state && !state.running && (await this.docker.imageChanged(state))) {
       this.sink(row.id)('info', 'Recreating sandbox')
@@ -531,12 +534,15 @@ export class ThreadService {
     if (!state) {
       await this.ensureCapacity(row.id)
       await this.docker.ensureVolume(row.volumeName, { [LABEL_THREAD]: row.id })
+      const project = await this.projects.getRow(row.projectId)
+      const repoVolume = project.source === 'blank' ? await this.docker.ensureProjectRepoVolume(project.id) : undefined
       this.sink(row.id)('info', 'Creating sandbox')
       containerId = await this.docker.createSandbox({
         threadId: row.id,
         projectId: row.projectId,
         token,
         volume: row.volumeName,
+        ...(repoVolume ? { repoVolume } : {}),
         serviceUrlTemplate: this.serviceUrls.template(row.id),
       })
       await this.patch(row.id, { containerId })
@@ -609,10 +615,16 @@ export class ThreadService {
       const projectEnv = this.sandboxEnv(id, await this.projects.decryptedEnv(project.id))
       const sink = this.sink(id)
 
-      const source: CloneSource =
-        project.source === 'github'
-          ? { kind: 'github', url: cloneUrl(requireRepoRef(project.repoUrl)), token: await this.credentials.githubTokenFor(requireRepoRef(project.repoUrl)) }
-          : { kind: 'blank', path: `${SANDBOX.reposMount}/${project.id}.git` }
+      const githubUrl = project.source === 'github' ? cloneUrl(requireRepoRef(project.repoUrl)) : null
+      const githubToken = project.source === 'github' ? await this.credentials.githubTokenFor(requireRepoRef(project.repoUrl)) : null
+      const source: CloneSource = project.source === 'github'
+        ? {
+            kind: 'github',
+            url: githubUrl!,
+            token: githubToken,
+            trustedGit: (operation, branch) => this.docker.trustedGit(row.volumeName, operation, githubUrl!, branch, githubToken!, signal),
+          }
+        : { kind: 'blank', path: SANDBOX.reposMount }
       const run = repoGit(sandbox.supervisor, {}, signal)
       const snapshotKey =
         restored === null ? null : await this.useSnapshot({ row, project, restored, source, supervisor: sandbox.supervisor, run, sink, signal })
@@ -1317,7 +1329,11 @@ export class ThreadService {
     await git(run, ['add', '-A'])
     const staged = await run(['git', 'diff', '--cached', '--quiet'])
     if (staged.code === 1) await git(run, ['commit', '-m', `valet: ${row.title}`])
-    await withAskpass(supervisor, token, (env) => git(run, ['push', '-u', 'origin', row.branch], { env, timeoutMs: 5 * 60_000 }))
+    if (project.source === 'github') {
+      await this.docker.trustedGit(row.volumeName, 'push', cloneUrl(requireRepoRef(project.repoUrl)), row.branch, token!)
+    } else {
+      await git(run, ['push', '-u', 'origin', row.branch], { timeoutMs: 5 * 60_000 })
+    }
     await this.patch(id, { lastActivityAt: new Date() })
     return { branch: row.branch }
   }
@@ -1512,7 +1528,16 @@ export class ThreadService {
   /** Aligns thread rows with the containers Docker actually has after a core restart. */
   async reconcile(): Promise<void> {
     const containers = await this.docker.listManaged()
-    const byThread = new Map(containers.map((c) => [c.Labels[LABEL_THREAD] ?? '', c]))
+    // Stop every legacy shared mount before any project repository is copied. Otherwise
+    // another live thread could push to the old bare repository during migration.
+    for (const c of containers) {
+      if (await this.docker.hasSharedReposMount(c.Id)) {
+        log.info('removing legacy shared-repository sandbox', { id: c.Id })
+        await this.docker.remove(c.Id)
+      }
+    }
+    const current = await this.docker.listManaged()
+    const byThread = new Map(current.map((c) => [c.Labels[LABEL_THREAD] ?? '', c]))
     const rows = await this.db.select().from(threads)
     for (const row of rows) {
       if (row.status === 'archived') continue

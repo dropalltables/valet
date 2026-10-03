@@ -202,8 +202,8 @@ test('a long all-time span buckets the series by week', dbTest, async () => {
 test('reports the newest rate-limit windows per agent', dbTest, async () => {
   const res = await new UsageService(db).summary('all', new Date('2026-09-03T14:00:00Z'))
   assert.deepEqual(res.rateLimits, [
-    { agent: 'claude', window: 'five_hour', utilization: 0.42, resetsAt: '2026-09-03T17:00:00.000Z', observedAt: '2026-09-03T12:00:00.000Z' },
-    { agent: 'claude', window: 'seven_day', utilization: 0.11, resetsAt: null, observedAt: '2026-09-03T12:00:00.000Z' },
+    { agent: 'claude', accountId: null, accountName: null, window: 'five_hour', utilization: 0.42, resetsAt: '2026-09-03T17:00:00.000Z', observedAt: '2026-09-03T12:00:00.000Z' },
+    { agent: 'claude', accountId: null, accountName: null, window: 'seven_day', utilization: 0.11, resetsAt: null, observedAt: '2026-09-03T12:00:00.000Z' },
   ])
 })
 

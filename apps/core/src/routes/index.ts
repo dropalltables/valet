@@ -61,6 +61,7 @@ const log = logger('http')
 
 /** GitHub's own ceiling on a webhook delivery; nothing larger can be a real one. */
 const GITHUB_WEBHOOK_MAX_BYTES = 25 * 1024 * 1024
+const API_MAX_BYTES = 1024 * 1024
 
 export type AppDeps = {
   version: string
@@ -224,6 +225,7 @@ export function createApp(deps: AppDeps): Hono {
     return c.json({ outcome }, 202)
   })
 
+  app.use('/api/*', bodyLimit({ maxSize: API_MAX_BYTES }))
   app.use('/api/*', deps.auth.middleware())
   app.route('/', deps.auth.routes())
 

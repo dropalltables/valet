@@ -4,12 +4,13 @@ import http, { type Server } from 'node:http'
 import zlib from 'node:zlib'
 import { test } from 'node:test'
 import { serve } from '@hono/node-server'
+import WebSocket, { WebSocketServer } from 'ws'
 import { Auth } from '../src/auth.js'
 import { loadConfig } from '../src/config.js'
 import { Cipher } from '../src/crypto.js'
 import type { Db } from '../src/db/index.js'
 import { SupervisorClient } from '../src/docker/supervisor-client.js'
-import { ServiceAuth } from '../src/services/auth.js'
+import { SERVICE_COOKIE, ServiceAuth } from '../src/services/auth.js'
 import { ServiceGateway } from '../src/services/gateway.js'
 import { ServiceUrls } from '../src/services/urls.js'
 import type { ServiceTarget, ThreadService } from '../src/threads/service.js'
@@ -83,7 +84,7 @@ function gateway(target: () => ServiceTarget, checks: { count: number }, opts: {
     cfg,
     urls: new ServiceUrls(cfg),
     serviceAuth: opts.serviceAuth ?? new ServiceAuth(cipher, false, null as unknown as Db),
-    auth: new Auth(cfg, cipher),
+    auth: new Auth(cfg, cipher, null as unknown as Db),
     threads,
   })
 }
@@ -318,4 +319,62 @@ test('service gateway keeps the review widget away from share-link guests', asyn
   assert.doesNotMatch(zlib.gunzipSync(page.bytes).toString('utf8'), /review\.js/)
   assert.equal((await send(corePort, `/service/${THREAD}/${PORT}/__valet/review.js`, { method: 'GET', headers })).status, 404)
   assert.equal((await send(corePort, `/service/${THREAD}/${PORT}/__valet/review`, { method: 'POST', headers })).status, 403)
+})
+
+test('revoking a service share closes its active guest WebSockets', async (t) => {
+  const upstream = http.createServer()
+  const upstreamWs = new WebSocketServer({ server: upstream })
+  const upstreamPort = await listen(upstream)
+  const cfg = loadConfig({ DATABASE_URL: 'postgres://unused', VALET_SECRET_KEY: crypto.randomBytes(32).toString('base64') })
+  const cipher = new Cipher(cfg.VALET_SECRET_KEY)
+  const serviceAuth = new ServiceAuth(cipher, true, null as unknown as Db)
+  const shares = { generation: 0, expiresAt: new Date(Date.now() + 60_000).toISOString() }
+  const supervisor = new SupervisorClient(`http://127.0.0.1:${upstreamPort}`, 'tok')
+  const threads = {
+    serviceTarget: async () => ({ kind: 'running', row: { serviceShares: { [PORT]: shares } }, supervisor }),
+    serviceShare: async () => shares,
+    setServiceShare: async (_id: string, _port: number, next: typeof shares) => Object.assign(shares, next),
+  } as unknown as ThreadService
+  const gw = new ServiceGateway({ cfg, urls: new ServiceUrls(cfg), serviceAuth, auth: new Auth(cfg, cipher, null as unknown as Db), threads })
+  const core = http.createServer()
+  core.on('upgrade', (req, socket, head) => {
+    void gw.upgrade(req, socket, head, THREAD, String(PORT)).catch(() => socket.destroy())
+  })
+  const corePort = await listen(core)
+  t.after(() => {
+    upstreamWs.close()
+    upstream.close()
+    core.close()
+  })
+
+  const cookie = serviceAuth.cookie(HOST, { v: 1, t: THREAD, p: PORT, s: 'share', g: 0, exp: Date.now() + 60_000, ret: '/' }).value
+  const ws = new WebSocket(`ws://127.0.0.1:${corePort}/service/${THREAD}/${PORT}/`, { headers: { 'x-valet-service-host': HOST, cookie: `${SERVICE_COOKIE}=${cookie}` } })
+  await new Promise<void>((resolve, reject) => {
+    ws.once('open', resolve)
+    ws.once('error', reject)
+  })
+  const closed = new Promise<void>((resolve) => ws.once('close', () => resolve()))
+  await gw.revoke(THREAD, PORT)
+  await closed
+  assert.equal(shares.generation, 1)
+})
+
+test('owner service bootstrap tokens are single-use without breaking share links', async (t) => {
+  const serviceAuth = new ServiceAuth(new Cipher(crypto.randomBytes(32)), true, null as unknown as Db)
+  const corePort = await reviewCore(t, { serviceAuth })
+  const owner = serviceAuth.mint({ v: 1, t: THREAD, p: PORT, s: 'owner', g: 0, exp: Date.now() + 60_000, ret: '/' })
+  const path = `/service/${THREAD}/${PORT}/__valet/auth?token=${encodeURIComponent(owner)}`
+  const first = await send(corePort, path, { method: 'GET' })
+  assert.equal(first.status, 302)
+  assert.equal(first.headers['cache-control'], 'no-store')
+  assert.equal(first.headers['referrer-policy'], 'no-referrer')
+  assert.equal((await send(corePort, path, { method: 'GET' })).status, 403)
+  const cookie = first.headers['set-cookie']?.[0]?.split(';')[0]
+  assert.ok(cookie)
+  assert.equal((await send(corePort, path, { method: 'GET', headers: { cookie } })).status, 302)
+
+  const share = serviceAuth.mint({ v: 1, t: THREAD, p: PORT, s: 'share', g: 0, exp: Date.now() + 60_000, ret: '/' })
+  const sharePath = `/service/${THREAD}/${PORT}/__valet/auth?token=${encodeURIComponent(share)}`
+  assert.equal((await send(corePort, sharePath, { method: 'GET' })).status, 302)
+  assert.equal((await send(corePort, sharePath, { method: 'GET' })).status, 302)
 })

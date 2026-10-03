@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { eq, sql } from 'drizzle-orm'
 import { parseCookie } from '../auth.js'
 import { timingSafeEqualStrings, type Cipher } from '../crypto.js'
@@ -37,6 +38,7 @@ export type ServiceToken = {
  */
 export class ServiceAuth {
   private ownerGeneration = 0
+  private readonly usedOwnerTokens = new Map<string, number>()
 
   constructor(
     private readonly cipher: Cipher,
@@ -59,10 +61,11 @@ export class ServiceAuth {
       .onConflictDoUpdate({ target: authState.id, set: { serviceOwnerGeneration: sql`${authState.serviceOwnerGeneration} + 1` } })
       .returning()
     if (row) this.ownerGeneration = row.serviceOwnerGeneration
+    this.usedOwnerTokens.clear()
   }
 
   mint(token: ServiceToken): string {
-    return Buffer.from(this.cipher.encryptJson(token), 'base64').toString('base64url')
+    return Buffer.from(this.cipher.encryptJson(token.s === 'owner' ? { ...token, g: this.ownerGeneration } : token), 'base64').toString('base64url')
   }
 
   /** Null when tampered, malformed, or expired. */
@@ -76,7 +79,19 @@ export class ServiceAuth {
     if (token.v !== 1 || typeof token.t !== 'string' || typeof token.p !== 'number' || typeof token.exp !== 'number') return null
     if ((token.s !== 'owner' && token.s !== 'share') || typeof token.g !== 'number' || typeof token.ret !== 'string') return null
     if (token.exp <= Date.now()) return null
+    if (token.s === 'owner' && token.g !== this.ownerGeneration) return null
     return token
+  }
+
+  /** Share links remain reusable; owner bootstrap tokens are single-use per process. */
+  consumeOwnerToken(raw: string, token: ServiceToken): boolean {
+    if (token.s !== 'owner' || !this.enabled) return true
+    const now = Date.now()
+    for (const [key, expires] of this.usedOwnerTokens) if (expires <= now) this.usedOwnerTokens.delete(key)
+    const key = crypto.createHash('sha256').update(raw).digest('hex')
+    if (this.usedOwnerTokens.has(key)) return false
+    this.usedOwnerTokens.set(key, token.exp)
+    return true
   }
 
   private ownerValue(host: string, generation: number): string {
