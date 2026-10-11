@@ -51,7 +51,7 @@ export function ProjectView({ id }: { id: string }) {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-6 py-8">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-4 py-6 sm:px-6 sm:py-8">
         <h1 className="truncate text-lg font-medium">{project.name}</h1>
         <Details project={project} />
         <Snapshot project={project} />

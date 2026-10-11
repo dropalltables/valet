@@ -69,7 +69,7 @@ function Composer({ threadId, status }: { threadId: string; status: ThreadStatus
   }
 
   return (
-    <div className="border-t px-4 py-3">
+    <div className="border-t px-2 py-2 md:px-4 md:py-3">
       <PromptInput onSubmit={send} accept="image/*" multiple globalDrop className="mx-auto max-w-3xl">
         <DropOverlay />
         <AttachmentStrip />

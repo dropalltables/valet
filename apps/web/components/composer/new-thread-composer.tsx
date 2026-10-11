@@ -199,7 +199,7 @@ function Composer() {
         <DropOverlay />
         <AttachmentStrip />
         <ComposerTextarea disabled={busy} canSubmit={canSubmit} />
-        <PromptInputFooter className="flex-nowrap items-center gap-2">
+        <PromptInputFooter className="flex-wrap items-center gap-2 sm:flex-nowrap">
           <PromptInputTools className="min-w-0 flex-nowrap gap-1">
             <AttachButton />
             <PromptInputSelect value={effectivePermissions ?? ''} onValueChange={setPermissions} disabled={permissionModes.length === 0}>
@@ -263,7 +263,7 @@ function Composer() {
             )}
             <Button type="submit" size="sm" className="shrink-0" disabled={!canSubmit}>
               Start
-              <kbd className="ml-1 font-sans text-xs text-primary-foreground/70">{modKey}+Enter</kbd>
+              <kbd className="ml-1 hidden font-sans text-xs text-primary-foreground/70 sm:inline">{modKey}+Enter</kbd>
             </Button>
           </div>
         </PromptInputFooter>

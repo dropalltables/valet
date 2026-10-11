@@ -20,7 +20,7 @@ type Props = {
 export function TranscriptView({ threadId, transcript, status, reconnecting, streamError }: Props) {
   return (
     <Conversation className="min-h-0 flex-1">
-      <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-6 py-4">
+      <ConversationContent className="mx-auto w-full max-w-3xl gap-6 px-3 py-4 sm:px-6">
         {transcript.logs.length > 0 && <LogsBlock logs={transcript.logs} status={status} />}
         {transcript.turns.map((turn) => (
           <TurnView key={turn.id} threadId={threadId} turn={turn} />

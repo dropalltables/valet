@@ -30,7 +30,7 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: 'archived', label: 'Archived' },
 ]
 
-export function Sidebar() {
+export function Sidebar({ className }: { className?: string }) {
   const { threads } = useAppData()
   const pathname = usePathname()
   const now = useNow()
@@ -45,7 +45,7 @@ export function Sidebar() {
   )
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r">
+    <aside className={cn('flex h-full shrink-0 flex-col', className)}>
       <div className="flex items-center justify-between px-3 pt-3 pb-2">
         <Link href="/" className="px-1 text-sm font-medium">
           Valet
