@@ -7,6 +7,7 @@ import { AGENT_LABELS, CI_FIX_MAX_ATTEMPTS, formatBytes, permissionLabel, type P
 import { MoreHorizontalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { useAccounts } from '@/lib/hooks'
 import { usd } from '@/lib/format'
 import {
@@ -20,7 +21,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -72,16 +80,17 @@ export function ThreadHeader({ thread, project, costUsd, usage, actions, service
   }
 
   const cost = usd(costUsd ?? thread.costUsd)
+  const autoFix = useAutoFixCi(thread.id)
 
   return (
-    <header className="flex flex-col gap-1 border-b px-4 py-2">
+    <header className="flex flex-col gap-1 border-b px-3 py-2 md:px-4">
       <div className="flex items-center gap-2">
         <TitleEditor title={thread.title} onRename={rename} />
         <span className="flex-1" />
         {/* Stop lives in the composer; Push and Create PR live in the Changes tab. */}
         {thread.pr && (
           <>
-            <AutoFixCi threadId={thread.id} pr={thread.pr} />
+            <AutoFixCi pr={thread.pr} control={autoFix} className="hidden sm:flex" />
             <Button asChild size="sm" variant="secondary">
               <a href={thread.pr.url} target="_blank" rel="noreferrer">
                 {PR_STATE[thread.pr.state]} #{thread.pr.number}
@@ -97,6 +106,20 @@ export function ThreadHeader({ thread, project, costUsd, usage, actions, service
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {thread.pr && (
+              <>
+                {/* The switch beside the PR button is hidden on a narrow screen. */}
+                <DropdownMenuCheckboxItem
+                  className="sm:hidden"
+                  checked={thread.pr.autoFixCi}
+                  disabled={autoFix.busy}
+                  onCheckedChange={(c) => void autoFix.toggle(c === true)}
+                >
+                  Auto-fix CI
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator className="sm:hidden" />
+              </>
+            )}
             {(thread.status === 'idle' || thread.status === 'waiting') && (
               <DropdownMenuItem disabled={disabled} onSelect={actions.pause}>
                 Pause
@@ -128,20 +151,21 @@ export function ThreadHeader({ thread, project, costUsd, usage, actions, service
         ) : (
           <span>{thread.projectName}</span>
         )}
-        <span className="font-mono">
+        <span className="max-w-full truncate font-mono">
           {thread.branch} <span className="text-muted-foreground/60">from</span> {thread.baseBranch}
         </span>
         <span>
           {AGENT_LABELS[thread.agent]} {thread.model}
         </span>
-        <span>{permissionLabel(thread.agent, thread.permissions)}</span>
+        {/* Sandbox details that matter less on a phone, where header height is transcript height. */}
+        <span className="hidden sm:inline">{permissionLabel(thread.agent, thread.permissions)}</span>
         <AccountSwitch thread={thread} />
         {cost && <span className="tabular-nums">{cost}</span>}
-        {thread.mcpServers > 0 && <span className="tabular-nums">{thread.mcpServers} MCP</span>}
+        {thread.mcpServers > 0 && <span className="hidden tabular-nums sm:inline">{thread.mcpServers} MCP</span>}
         {usage && (
           <>
-            <span className="tabular-nums">{formatBytes(usage.memoryBytes)}</span>
-            <span className="tabular-nums">{usage.cpuPercent}% CPU</span>
+            <span className="hidden tabular-nums sm:inline">{formatBytes(usage.memoryBytes)}</span>
+            <span className="hidden tabular-nums sm:inline">{usage.cpuPercent}% CPU</span>
           </>
         )}
         {serviceCount > 0 && (
@@ -214,11 +238,12 @@ function AccountSwitch({ thread }: { thread: ThreadListItem }) {
   )
 }
 
+type AutoFixControl = { id: string; busy: boolean; toggle: (checked: boolean) => Promise<void> }
+
 /** Whether GitHub check failures on the pull request come back to the thread as a message. */
-function AutoFixCi({ threadId, pr }: { threadId: string; pr: PullRequest }) {
+function useAutoFixCi(threadId: string): AutoFixControl {
   const { upsertThread } = useAppData()
   const [busy, setBusy] = useState(false)
-  const id = `auto-fix-ci-${threadId}`
 
   async function toggle(checked: boolean): Promise<void> {
     setBusy(true)
@@ -231,8 +256,13 @@ function AutoFixCi({ threadId, pr }: { threadId: string; pr: PullRequest }) {
     }
   }
 
+  return { id: `auto-fix-ci-${threadId}`, busy, toggle }
+}
+
+function AutoFixCi({ pr, control, className }: { pr: PullRequest; control: AutoFixControl; className?: string }) {
+  const { id, busy, toggle } = control
   return (
-    <span className="flex items-center gap-1.5">
+    <span className={cn('flex items-center gap-1.5', className)}>
       <Switch id={id} size="sm" checked={pr.autoFixCi} disabled={busy} onCheckedChange={(c) => void toggle(c)} />
       <Label htmlFor={id} className="text-xs font-normal text-muted-foreground">
         Auto-fix CI

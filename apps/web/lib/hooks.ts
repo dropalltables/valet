@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import type { UsageRange } from '@valet/shared'
 import useSWR from 'swr'
 import { api } from './api'
@@ -58,4 +58,31 @@ export function useBranches(repoUrl: string | null) {
 
 export function useUsage(range: UsageRange) {
   return useSWR(['usage', range], () => api.usage(range), { revalidateOnFocus: false })
+}
+
+/** The sidebar collapses into a drawer and the thread panes stack below this width (Tailwind's `md`). */
+export const MOBILE_QUERY = '(max-width: 767.98px)'
+
+/**
+ * Whether `query` matches. Server-rendered as false and re-read on hydration,
+ * so a page that depends on it is laid out for a wide screen first.
+ */
+export function useMediaQuery(query: string): boolean {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      const list = window.matchMedia(query)
+      list.addEventListener('change', onChange)
+      return () => list.removeEventListener('change', onChange)
+    },
+    [query],
+  )
+  return useSyncExternalStore(
+    subscribe,
+    () => window.matchMedia(query).matches,
+    () => false,
+  )
+}
+
+export function useIsMobile(): boolean {
+  return useMediaQuery(MOBILE_QUERY)
 }

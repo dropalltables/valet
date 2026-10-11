@@ -475,7 +475,7 @@ function SharePopover({ threadId, service }: { threadId: string; service: Servic
           Share
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 text-xs">
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-1rem)] text-xs">
         <div className="flex flex-wrap gap-1">
           {SHARE_HOURS.map((h) => (
             <Button key={h} size="xs" variant="outline" disabled={busy} onClick={() => void share(h)}>

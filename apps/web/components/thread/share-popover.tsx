@@ -58,7 +58,7 @@ export function SharePopover({ threadId }: { threadId: string }) {
           Share
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 text-xs">
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-1rem)] text-xs">
         <div role="radiogroup" aria-label="Visibility" className="flex rounded-md border p-0.5">
           {VISIBILITY.map((v) => (
             <button

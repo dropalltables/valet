@@ -4,12 +4,13 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { LIVE_STATUSES, type Project, type ThreadListItem } from '@valet/shared'
 import { api, ApiError, errorMessage } from '@/lib/api'
+import { useIsMobile } from '@/lib/hooks'
 import { serviceRowCount, useThreadStream, type StreamState } from '@/lib/stream'
 import { Button } from '@/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useAppData } from '@/components/app/data-provider'
 import { CreatePrDialog } from '@/components/thread/create-pr-dialog'
-import { RightPane, type RightPaneTab } from '@/components/thread/right-pane'
+import { RightPane, type PaneTab } from '@/components/thread/right-pane'
 import { useThreadActions } from '@/components/thread/thread-actions'
 import { ThreadComposer } from '@/components/thread/thread-composer'
 import { ThreadHeader } from '@/components/thread/thread-header'
@@ -63,7 +64,21 @@ function ThreadBody({
 }) {
   const { patchThread } = useAppData()
   const actions = useThreadActions(thread, project)
-  const [tab, setTab] = useState<RightPaneTab>('changes')
+  const mobile = useIsMobile()
+  const [tab, setTab] = useState<PaneTab>(() => (mobile ? 'chat' : 'changes'))
+
+  const chat = (
+    <>
+      <TranscriptView
+        threadId={thread.id}
+        transcript={stream.transcript}
+        status={thread.status}
+        reconnecting={stream.everConnected && !stream.connected}
+        streamError={stream.error}
+      />
+      <ThreadComposer threadId={thread.id} status={thread.status} />
+    </>
+  )
 
   return (
     <div className="flex h-full flex-col">
@@ -76,22 +91,38 @@ function ThreadBody({
         serviceCount={serviceRowCount(stream.services, stream.managedServices)}
         onOpenServices={() => setTab('services')}
       />
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel defaultSize="55" minSize="30" className="flex min-w-0 flex-col">
-          <TranscriptView
-            threadId={thread.id}
-            transcript={stream.transcript}
-            status={thread.status}
-            reconnecting={stream.everConnected && !stream.connected}
-            streamError={stream.error}
+      {mobile ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RightPane
+            thread={thread}
+            project={project}
+            actions={actions}
+            services={stream.services}
+            managed={stream.managedServices}
+            tab={tab}
+            onTabChange={setTab}
+            chat={chat}
           />
-          <ThreadComposer threadId={thread.id} status={thread.status} />
-        </ResizablePanel>
-        <ResizableHandle />
-        <ResizablePanel defaultSize="45" minSize="20" className="min-w-0">
-          <RightPane thread={thread} project={project} actions={actions} services={stream.services} managed={stream.managedServices} tab={tab} onTabChange={setTab} />
-        </ResizablePanel>
-      </ResizablePanelGroup>
+        </div>
+      ) : (
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+          <ResizablePanel defaultSize="55" minSize="30" className="flex min-w-0 flex-col">
+            {chat}
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel defaultSize="45" minSize="20" className="min-w-0">
+            <RightPane
+              thread={thread}
+              project={project}
+              actions={actions}
+              services={stream.services}
+              managed={stream.managedServices}
+              tab={tab === 'chat' ? 'changes' : tab}
+              onTabChange={setTab}
+            />
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      )}
       <CreatePrDialog thread={thread} open={actions.prOpen} onOpenChange={actions.setPrOpen} onCreated={patchThread} />
     </div>
   )

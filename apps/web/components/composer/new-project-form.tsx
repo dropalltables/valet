@@ -77,7 +77,7 @@ export function NewProjectForm({ onCreated, onCancel, className }: Props) {
           <>
             <RepoSearch selected={repo} onSelect={pickRepo} className={repo ? 'h-36' : 'h-full'} />
             {repo && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="project-name">Name</Label>
                   <Input id="project-name" value={name} onChange={(e) => setName(e.target.value)} />

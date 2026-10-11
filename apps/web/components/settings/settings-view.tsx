@@ -52,7 +52,7 @@ import { McpServers } from '@/components/settings/mcp-servers'
 export function SettingsView() {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 px-6 py-8">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-10 px-4 py-6 sm:px-6 sm:py-8">
         <h1 className="text-lg font-medium">Settings</h1>
         <Accounts />
         <Credentials />

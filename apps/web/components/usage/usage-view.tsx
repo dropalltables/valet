@@ -44,7 +44,7 @@ export function UsageView() {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-6 py-8">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-10 px-4 py-6 sm:px-6 sm:py-8">
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-medium">Usage</h1>
           <Tabs
@@ -135,7 +135,7 @@ function Summary({ totals }: { totals: UsageTotals | null }) {
     { label: 'Threads', value: totals && String(totals.threads) },
   ]
   return (
-    <dl className="grid grid-cols-5 gap-4">
+    <dl className="grid grid-cols-3 gap-4 sm:grid-cols-5">
       {stats.map((s) => (
         <div key={s.label} className="flex flex-col gap-1">
           <dt className="text-xs whitespace-nowrap text-muted-foreground">{s.label}</dt>
